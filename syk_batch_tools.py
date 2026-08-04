@@ -28,12 +28,7 @@ import os
 import signal
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
 import numpy as np
-
-# Compatibility with newer NumPy: np.trapz was removed; np.trapezoid is the replacement.
-if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
-    np.trapz = np.trapezoid
 import pandas as pd
 from scipy.interpolate import interp1d
 
@@ -123,13 +118,7 @@ def infer_dt_from_t(t: np.ndarray) -> float:
     t = np.asarray(t).squeeze()
     return float(np.median(np.diff(t)))
 
-
-# ============================================================
-# Real-time / real-frequency equilibrium self-consistency
-# ============================================================
-
-def _trapz_weights(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x)
+def trapz_weights(x: np.ndarray) -> np.ndarray:
     dx = x[1] - x[0]
     w = np.ones_like(x, dtype=float) * dx
     w[0] *= 0.5
@@ -137,12 +126,17 @@ def _trapz_weights(x: np.ndarray) -> np.ndarray:
     return w
 
 
+# ============================================================
+# Real-time / real-frequency equilibrium self-consistency
+# ============================================================
+
+
 def omega_to_time(X_w: np.ndarray, omega: np.ndarray, t: np.ndarray, chunk: int = 512) -> np.ndarray:
     """x(t) = int dω/(2π) exp(-iωt) X(ω)."""
     omega = np.asarray(omega)
     t = np.asarray(t)
     X_w = np.asarray(X_w)
-    w_omega = _trapz_weights(omega) / (2 * np.pi)
+    w_omega = trapz_weights(omega) / (2 * np.pi)
     X_weighted = X_w * w_omega
     out = np.empty(len(t), dtype=complex)
     for a in range(0, len(t), chunk):
@@ -157,7 +151,7 @@ def time_to_omega(x_t: np.ndarray, t: np.ndarray, omega: np.ndarray, chunk: int 
     omega = np.asarray(omega)
     t = np.asarray(t)
     x_t = np.asarray(x_t)
-    w_t = _trapz_weights(t)
+    w_t = trapz_weights(t)
     x_weighted = x_t * w_t
     out = np.empty(len(omega), dtype=complex)
     for a in range(0, len(omega), chunk):
@@ -165,15 +159,7 @@ def time_to_omega(x_t: np.ndarray, t: np.ndarray, omega: np.ndarray, chunk: int 
         phase = np.exp(1j * np.outer(ww, t))
         out[a : a + chunk] = phase @ x_weighted
     return out
-
-
-def trapz_weights(x: np.ndarray) -> np.ndarray:
-    dx = x[1] - x[0]
-    w = np.ones_like(x, dtype=float) * dx
-    w[0] *= 0.5
-    w[-1] *= 0.5
-    return w
-
+    
 
 def real_spectral_to_imag_time(
     omega: np.ndarray,
@@ -224,7 +210,7 @@ def _init_eq_A_F(
 
     A = 0.5 * (A + A[::-1])
     A = np.clip(A, 0.0, None)
-    sum_A = np.trapz(A, omega_real) / (2 * np.pi)
+    sum_A = np.trapezoid(A, omega_real) / (2 * np.pi)
     if sum_A > 0:
         A /= sum_A
     else:
@@ -232,7 +218,7 @@ def _init_eq_A_F(
         A = 2.0 * width0 / (omega_real**2 + width0**2)
         A = 0.5 * (A + A[::-1])
         A = np.clip(A, 0.0, None)
-        A /= np.trapz(A, omega_real) / (2 * np.pi)
+        A /= np.trapezoid(A, omega_real) / (2 * np.pi)
 
     F_w = (1.0 - nF) * A
     F_t = omega_to_time(F_w, omega_real, t_grid)
@@ -490,12 +476,12 @@ def solve_equilibrium_greater_real_time(
             A_new = 0.5 * (A_new + A_new[::-1])
         if clip_negative_A:
             A_new = np.clip(A_new, 0.0, None)
-        sum_A = np.trapz(A_new, omega_real) / (2 * np.pi)
+        sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
         if normalize_A:
             if not np.isfinite(sum_A) or sum_A <= 0:
                 raise RuntimeError(f"Bad spectral sum at iter {it}: {sum_A}")
             A_new = A_new / sum_A
-            sum_A = np.trapz(A_new, omega_real) / (2 * np.pi)
+            sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
 
         F_w_new   = (1.0 - nF) * A_new
         F_t_new = omega_to_time(F_w_new, omega_real, t_grid)
@@ -590,7 +576,7 @@ def solve_equilibrium_greater_real_time(
     print("\nFinal checks:")
     print("  F(0) = iG>(0) =", F_t[i0])
     print("  should be approx +0.5")
-    print("  spectral sum =", np.trapz(A, omega_real) / (2 * np.pi))
+    print("  spectral sum =", np.trapezoid(A, omega_real) / (2 * np.pi))
     print("  A evenness max |A(w)-A(-w)| =", np.max(np.abs(A - A[::-1])))
     print("  max |G>| =", np.max(np.abs(Ggt_t)))
     print(f"  converged = {converged}, final dab^{kbe_dab_power:g} = {last_dab_sqrt_max:.3e}")
@@ -616,20 +602,12 @@ def greater_from_spectral(omega: np.ndarray, A: np.ndarray, beta: float, t_eval:
     return Gt
 
 
-def trap_weights(m: int, dt: float) -> np.ndarray:
-    w = np.ones(m, dtype=float) * dt
-    w[0] *= 0.5
-    if m > 1:
-        w[-1] *= 0.5
-    return w
-
 
 def sigma_greater_syk4(G: np.ndarray, J2_of_t: np.ndarray, J4_of_t: np.ndarray) -> np.ndarray:
     """Sigma^> = J2(t1)J2(t2) G^> - J4(t1)J4(t2) [G^>]^3."""
     JJ2 = J2_of_t[:, None] * J2_of_t[None, :]
     JJ4 = J4_of_t[:, None] * J4_of_t[None, :]
     return JJ2 * G - JJ4 * G**3
-
 
 def rhs_t1(
     G: np.ndarray, S: np.ndarray, i: int, j: int, dt: float,
@@ -646,14 +624,14 @@ def rhs_t1(
     Sigma_R_total = Sigma_R - K_R (see calc_kbe_d_ab_syk_equilibrium).
     """
     k = np.arange(i + 1)
-    w = trap_weights(len(k), dt)
+    w = trapz_weight(len(k), dt)
     Sigma_R = S[i, k] + S[k, i]
     if K_R_mat is not None:
         Sigma_R = Sigma_R - K_R_mat[i, k]
     I1 = np.sum(w * Sigma_R * G[k, j])
 
     k = np.arange(j + 1)
-    w = trap_weights(len(k), dt)
+    w = trapz_weight(len(k), dt)
     G_A = -(G[k, j] + G[j, k])
     I2 = np.sum(w * S[i, k] * G_A)
     return -1j * (I1 + I2)
@@ -671,12 +649,12 @@ def rhs_t2(
     rhs_t1 (Sigma_A_total = Sigma_A - K^A; see calc_kbe_d_ab_syk_equilibrium).
     """
     k = np.arange(i + 1)
-    w = trap_weights(len(k), dt)
+    w = trapz_weight(len(k), dt)
     G_R = G[i, k] + G[k, i]
     I1 = np.sum(w * G_R * S[k, j])
 
     k = np.arange(j + 1)
-    w = trap_weights(len(k), dt)
+    w = trapz_weight(len(k), dt)
     Sigma_A = -(S[k, j] + S[j, k])
     if K_R_mat is not None:
         Sigma_A = Sigma_A - np.conj(K_R_mat[j, k])
@@ -929,7 +907,7 @@ def _central_derivative_1d(X: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 def _conv_1d_same(A: np.ndarray, B: np.ndarray, t: np.ndarray) -> np.ndarray:
     """C(t) = int du A(t-u) B(u), for scalar arrays on a symmetric uniform grid."""
-    w = _trapz_weights(t)
+    w = trapz_weights(t)
     return np.convolve(np.asarray(B) * w, np.asarray(A), mode="same")
 
 
