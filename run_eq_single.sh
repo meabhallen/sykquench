@@ -5,10 +5,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --exclude=n0085.lr4,n0112.lr4,n0122.lr4
-#SBATCH --mem=32G
-#SBATCH --time=72:00:00
-#SBATCH --output=/global/scratch/users/%u/syk/logs/eq_%j.out
-#SBATCH --error=/global/scratch/users/%u/syk/logs/eq_%j.err
+#SBATCH --mem=16G
+#SBATCH --time=16:00:00
+#SBATCH --output=/global/scratch/users/%u/sykquench/logs/eq_%j.out
+#SBATCH --error=/global/scratch/users/%u/sykquench/logs/eq_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=meabh_allen@berkeley.edu
 #SBATCH --requeue
@@ -25,7 +25,7 @@ export VECLIB_MAXIMUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-WORK_DIR=/global/scratch/users/$USER/syk
+WORK_DIR=/global/scratch/users/$USER/sykquench
 cd "$WORK_DIR"
 
 # ── Output tag ────────────────────────────────────────────────────────────────
