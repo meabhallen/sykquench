@@ -15,8 +15,7 @@ evolution with the "engineered kernel" — a tuned deformation added to the
 equilibrium self-energy that cancels the soft-mode (h=2) overlap, so the
 prepared state is dominated by the first subleading operator (h1) instead.
 The tuning itself (finding the right kernel couplings) is done separately in
-`syk_matsubara_f00.ipynb` / `syk_matsubara_kernel.ipynb`; this doc only
-covers *using* an already-tuned kernel to prepare a state and quench it.
+`syk_matsubara_f00.ipynb` / `syk_matsubara_kernel.ipynb`; now we discuss *using* an already-tuned kernel to prepare a state and quench it.
 
 Everything below drives one script, `syk_batch_tools.py`, which has two
 subcommands: `eq-one` (equilibrium solve) and `kbe-one` (real-time KBE
