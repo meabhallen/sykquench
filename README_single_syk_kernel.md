@@ -15,15 +15,12 @@ sweeps / wrappers around these two.
 
 ## Requirements
 
-`numpy`, `pandas`, `scipy`. Nothing exotic — any environment with those
-three works, locally or on the cluster (`module load python/3.11.6-gcc-11.4.0`
-on Lawrencium already provides them).
+`numpy`, `pandas`, `scipy`
 
 ## Two ways to run
 
 **Locally** (`run_local.sh`): runs one `eq-one` + one `kbe-one` pair directly
-with `python3`, no SLURM. Good for testing a single (J4, beta, kernel) point
-before committing to a cluster sweep. Edit the parameters at the top of the
+with `python3`, no SLURM. Edit the parameters at the top of the
 file, then:
 
 ```bash
@@ -57,24 +54,20 @@ bash submit_kbe.sh    # step 2 — reads the manifest submit_eq.sh produced
    present during the real-time evolution (`kernel_lambda/c/cutoff`)**. For
    normal quench production runs, the evolution kernel is always trivial —
    `0, 0, 0` — because the engineered deformation is only a trick for
-   *preparing* the state; nothing forces it to remain on during the
-   dynamics. So a typical `kbe-one` call sets `--kernel-lambda 0
+   preparing the state. So a typical `kbe-one` call sets `--kernel-lambda 0
    --kernel-c 0` but a *nonzero* `--eq-kernel-lambda/-c/-cutoff` matching
    whatever `eq-one` run you want to quench from.
 
    If `--eq-file` isn't given explicitly, `kbe-one` searches the eq
    manifest for a converged row matching `(J4_i, beta, eq_kernel_lambda,
    eq_kernel_c, eq_kernel_cutoff)` and picks the finest-resolution match.
-   **This means step 1 must have actually produced a matching, converged
-   equilibrium file before step 2 can find it** — same `J4`, same `beta`,
-   same kernel triple.
+   This means step 1 must have actually produced a matching, converged
+   equilibrium file before step 2 can find it.
 
 ## Parameter glossary
 
 **Physical**
-- `J4` (`J4_i`/`J4_f` for KBE) — the quartic SYK coupling. A quench ramps
-  `J4_i -> J4_f`; `J4_i == J4_f` runs a stationarity check instead of a real
-  quench.
+- `J4` (`J4_i`/`J4_f` for KBE) — the quartic SYK coupling.
 - `beta` — inverse temperature of the initial equilibrium ensemble.
 - `J2` (`J2_i`/`J2_f`) — optional quadratic coupling, default 0 (pure SYK4).
 
@@ -83,13 +76,12 @@ bash submit_kbe.sh    # step 2 — reads the manifest submit_eq.sh produced
   Both signs (`+lambda`, `-lambda`) are typically needed together, since
   downstream analysis often reads off the odd-in-lambda response
   `D_lambda = (G_+ - G_-)/(2*lambda)`.
-- `kernel_c` — the tuned coefficient (`delta_star`) that cancels the h=2
+- `kernel_c` — the tuned coefficient (`delta_star`) that tries to cancel the h=2
   overlap at a given cutoff. Comes out of `syk_matsubara_kernel.ipynb`, not
-  a free parameter you pick by hand.
+  a free parameter.
 - `kernel_cutoff` (`Lambda`) — the energy cutoff of the kernel regulator
   `[Lambda/(Lambda - i*omega)]^4`. `kernel_c` and `kernel_cutoff` are a
-  **paired tuple** — each tuned `Lambda` has its own `delta_star(Lambda)`.
-  Don't loop over them as independent arrays; loop over `(c, cutoff)` pairs.
+  **paired tuple** — each tuned `Lambda` has its own `delta_star(Lambda)`; loop over `(c, cutoff)` pairs.
   Defaults to `0.5 * max(|J4|, 1.0)` if left unset and `lambda != 0`.
 - For `kbe-one` specifically, the `eq_kernel_*` versions of these three
   select which equilibrium file to quench from (see workflow above), while
@@ -108,7 +100,7 @@ bash submit_kbe.sh    # step 2 — reads the manifest submit_eq.sh produced
   slower).
 
 **KBE timing (kbe-one)**
-- `t_pre`/`t_post` or `t_pre_factor`/`t_post_factor` — how far back before
+- `t_pre`/`t_post` — how far back before
   the quench and forward after it to evolve, either as absolute times or as
   multiples of `beta`.
 - `n_corr`, `corr_tol` — predictor-corrector iterations (and their
