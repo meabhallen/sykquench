@@ -10,13 +10,23 @@ module load python/3.11.6-gcc-11.4.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 J4S=(1)
-BETAS=(5) 
+BETAS=(5)
 
-# Tuned-kernel source. Defaults reproduce plain production eq runs
-# (kernel off). Override for a kernel-tuning scan
-KERNEL_LAMBDAS=(0.005)
-KERNEL_CS=(0.026)
-KERNEL_CUTOFFS=(0.4)   	# factor of J4;
+# Tuned-kernel source. lambda is independent (submitted crossed with every
+# (kernel_c, kernel_cutoff) pair below) -- both signs are needed since the
+# real-time analysis reads off the odd-in-lambda response D_lambda =
+# (G_+ - G_-)/(2*lambda), which requires a matched +/-lambda pair per tuned
+# (delta_star, Lambda). kernel_c/kernel_cutoff are NOT independent: they are
+# delta_star(Lambda) pairs tuned in syk_matsubara_kernel.ipynb (large-betaJ
+# converged values, betaJ in [240,300,400]) so they must stay paired, not
+# looped independently -- an earlier version of this script (and, separately,
+# an earlier version of the analysis notebook) hit exactly this bug via
+# independent arrays silently forming the wrong (c, Lambda) combinations.
+KERNEL_LAMBDAS=(0.005 -0.005)
+KERNEL_C_CUTOFF_PAIRS=(
+    "-0.043936 0.65"
+    "-0.053648 0.75"
+)
 
 TOLS=(1e-08) 		# tol for delta_F
 DAB_TOLS=(1e-04)        # tolerance for max(d_ab**0.5)
@@ -45,8 +55,8 @@ for J4 in "${J4S[@]}"; do
 for BETA in "${BETAS[@]}"; do
 for TOL in "${TOLS[@]}"; do
 for KERNEL_LAMBDA in "${KERNEL_LAMBDAS[@]}"; do
-for KERNEL_C in "${KERNEL_CS[@]}"; do
-for KERNEL_CUTOFF_FACTOR in "${KERNEL_CUTOFFS[@]}"; do
+for KERNEL_C_CUTOFF in "${KERNEL_C_CUTOFF_PAIRS[@]}"; do
+read -r KERNEL_C KERNEL_CUTOFF_FACTOR <<< "$KERNEL_C_CUTOFF"
 for DAB_TOL in "${DAB_TOLS[@]}"; do
 for T in "${DTS[@]}"; do
 for OMEGA_M in "${OMEGA_MAXS[@]}"; do
@@ -71,7 +81,6 @@ print(Nw)
 
     COUNT=$(( COUNT + 1 ))
 
-done
 done
 done
 done

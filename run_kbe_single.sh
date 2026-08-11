@@ -7,8 +7,8 @@
 #SBATCH --exclude=n0085.lr4,n0112.lr4,n0122.lr4
 #SBATCH --mem=32G
 #SBATCH --time=48:00:00
-#SBATCH --output=/global/scratch/users/%u/syk/logs/kbe_%j.out
-#SBATCH --error=/global/scratch/users/%u/syk/logs/kbe_%j.err
+#SBATCH --output=/global/scratch/users/%u/sykquench/logs/kbe_%j.out
+#SBATCH --error=/global/scratch/users/%u/sykquench/logs/kbe_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=meabh_allen@berkeley.edu
 #SBATCH --requeue
@@ -25,7 +25,7 @@ export VECLIB_MAXIMUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-WORK_DIR=/global/scratch/users/$USER/syk
+WORK_DIR=/global/scratch/users/$USER/sykquench
 cd "$WORK_DIR"
 
 # ── Output tag ────────────────────────────────────────────────────────────────
@@ -33,8 +33,11 @@ safe() { echo "$1" | sed 's/\.$//; s/\./p/g; s/-/m/g'; }
 
 KERNEL_LAMBDA=${KERNEL_LAMBDA:-0.0}
 KERNEL_C=${KERNEL_C:-0.0}
+EQ_KERNEL_LAMBDA=${EQ_KERNEL_LAMBDA:-0.0}
+EQ_KERNEL_C=${EQ_KERNEL_C:-0.0}
+PROGRESS_EVERY=${PROGRESS_EVERY:-50}
 
-TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)"
+TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)"
 OUT_DIR="kbe_runs/$TAG"
 
 KERNEL_CUTOFF_FLAG=""
@@ -42,9 +45,15 @@ if [ -n "${KERNEL_CUTOFF:-}" ]; then
     KERNEL_CUTOFF_FLAG="--kernel-cutoff $KERNEL_CUTOFF"
 fi
 
+EQ_KERNEL_CUTOFF_FLAG=""
+if [ -n "${EQ_KERNEL_CUTOFF:-}" ]; then
+    EQ_KERNEL_CUTOFF_FLAG="--eq-kernel-cutoff $EQ_KERNEL_CUTOFF"
+fi
+
 echo "Job $SLURM_JOB_ID: J4_i=$J4_I J4_f=$J4_F beta=$BETA dt=$DT"
 echo "t_pre_factor=$T_PRE_FACTOR t_post_factor=$T_POST_FACTOR"
-echo "kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=${KERNEL_CUTOFF:-auto}"
+echo "evolution kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=${KERNEL_CUTOFF:-auto}"
+echo "eq-selection kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=${EQ_KERNEL_CUTOFF:-auto}"
 echo "Output: $OUT_DIR"
 
 # ── Signal handling / requeue ─────────────────────────────────────────────────
@@ -92,12 +101,14 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --t-post-factor "$T_POST_FACTOR"  \
     --corr-tol      "$CORR_TOL"       \
     --n-corr        "$N_CORR"         \
-    --iterations    "$ITERATIONS"     \
+    --progress-every "$PROGRESS_EVERY" \
     --kernel-lambda "$KERNEL_LAMBDA"  \
     --kernel-c      "$KERNEL_C"       \
+    --eq-kernel-lambda "$EQ_KERNEL_LAMBDA" \
+    --eq-kernel-c   "$EQ_KERNEL_C"    \
     --eq-dir        "$WORK_DIR/eq_runs"  \
     --out-dir       "$OUT_DIR"        \
-    $KERNEL_CUTOFF_FLAG &
+    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG &
 
 PY_PID=$!
 wait "$PY_PID"
