@@ -15,13 +15,13 @@ fi
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
 
-J4S=(1 2 3)
+J4S=(1 2 4)
 BETAS=(36 48 60 72)             
 
 # KBE evolution
 KBE_DT=0.05                     # time step size
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
-T_POST_FACTOR=3.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
+T_POST_FACTOR=2.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
 CORR_TOL=1e-14                  # precision required at each KBE step
 N_CORR=50                       # max number of solver iterations per KBE step (unless precision reached already)
 PROGRESS_EVERY=1000             # checkpoint every PROGRESS_EVERY time steps
