@@ -19,8 +19,8 @@ The tuning itself (finding the right kernel couplings) is done separately in
 
 Everything below drives one script, `syk_batch_tools.py`, which has two
 subcommands: `eq-one` (equilibrium solve) and `kbe-one` (real-time KBE
-evolution). All the bash scripts and `run_local.sh` are just parameter
-sweeps / wrappers around these two.
+evolution). All the bash scripts and `run_local_eq.sh` / `run_local_kbe.sh`
+are just parameter sweeps / wrappers around these two.
 
 ## Requirements
 
@@ -28,14 +28,17 @@ sweeps / wrappers around these two.
 
 ## Two ways to run
 
-**Locally** (`run_local.sh`): runs one `eq-one` + one `kbe-one` pair directly
-with `python3`, no SLURM. Edit the parameters at the top of the
-file, then:
+**Locally** (`run_local_eq.sh` + `run_local_kbe.sh`): runs one `eq-one` and
+one `kbe-one` job directly with `python3`, no SLURM — as two separate
+scripts, since a `kbe-one` run just reads a matching, already-converged
+`eq-one` output rather than needing to be run back-to-back with it. Edit the
+parameters at the top of each file, then:
 
 ```bash
-bash run_local.sh
+bash run_local_eq.sh    # step 1 — must run first
+bash run_local_kbe.sh    # step 2 — reads the eq run run_local_eq.sh produced
 # or, if your default python3 doesn't have numpy/pandas/scipy:
-PYTHON=/path/to/python3 bash run_local.sh
+PYTHON=/path/to/python3 bash run_local_eq.sh
 ```
 
 **On the cluster** (`submit_eq.sh` + `submit_kbe.sh`): loop over arrays of
@@ -126,8 +129,8 @@ From the large-`beta*J` converged Matsubara tuning:
 | `+0.005` / `-0.005` | `-0.053648` | `0.75` |
 
 These are the values hardcoded into `submit_eq.sh` / `submit_kbe.sh` /
-`run_local.sh`. If you retune the kernel in `syk_matsubara_kernel.ipynb`,
-update all three together.
+`run_local_eq.sh` / `run_local_kbe.sh`. If you retune the kernel in
+`syk_matsubara_kernel.ipynb`, update all four together.
 
 ## Outputs
 
@@ -136,5 +139,7 @@ update all three together.
   post-quench Green's function rows plus a copy of the equilibrium reference
   it quenched from.
 
-`run_local.sh` writes both under `./local_runs/`; the cluster scripts write
-under `/global/scratch/users/$USER/sykquench/`.
+`run_local_eq.sh` / `run_local_kbe.sh` write both under `../local_runs/`
+(i.e. outside the repo, in the `SYK Quenches` folder, so it's never git
+tracked); the cluster scripts write under
+`/global/scratch/users/$USER/sykquench/`.

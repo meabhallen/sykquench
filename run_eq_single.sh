@@ -101,6 +101,7 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" eq-one \
     --kernel-lambda "$KERNEL_LAMBDA"\
     --kernel-c      "$KERNEL_C"     \
     --out-dir       "$OUT_DIR"      \
+    --manifest-dir  "eq_runs"       \
     $KERNEL_CUTOFF_FLAG $DAB_FLAG &
 
 PY_PID=$!

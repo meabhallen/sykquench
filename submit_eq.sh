@@ -28,7 +28,7 @@ KERNEL_C_CUTOFF_PAIRS=(
     "-0.053648 0.75"
 )
 
-TOLS=(1e-08) 		# tol for delta_F
+TOLS=(1e-08) 		    # tol for delta_F
 DAB_TOLS=(1e-04)        # tolerance for max(d_ab**0.5)
 REQUIRE_DAB=1          	# set to 1 to require d_ab as well as delta_F for converged=True
 DTS=(0.0112)

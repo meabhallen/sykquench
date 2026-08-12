@@ -31,7 +31,6 @@ import signal
 import tempfile
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
 import numpy as np
 
 # Compatibility with newer NumPy: np.trapz was removed; np.trapezoid is the replacement.
@@ -148,6 +147,40 @@ def load_manifest(path: os.PathLike | str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+def load_eq_manifest_tree(eq_dir: os.PathLike | str) -> pd.DataFrame:
+    """Load and merge every syk_eq_manifest.csv found under eq_dir.
+
+    Each submit_eq.sh sweep job passes its own --out-dir eq_runs/<tag>/, so
+    its manifest and .npz are written together into that subfolder rather
+    than into one shared top-level file. This walks eq_dir itself plus every
+    immediate subfolder, so a single --eq-dir eq_runs finds matches across
+    an entire sweep with no separate aggregation step. A manifest and the
+    .npz files it lists are always written into the same directory (see
+    run_equilibrium_one), so each row's filename is resolved by basename
+    against the directory its own manifest came from -- this also self-heals
+    rows whose stored path went stale after the directory tree was renamed
+    or moved.
+    """
+    eq_dir = Path(eq_dir)
+    manifest_paths = [p for p in [eq_dir / "syk_eq_manifest.csv"] if p.exists()]
+    manifest_paths += sorted(eq_dir.glob("*/syk_eq_manifest.csv"))
+
+    frames = []
+    for manifest_path in manifest_paths:
+        df = load_manifest(manifest_path)
+        if df.empty:
+            continue
+        df = df.copy()
+        df["filename"] = [
+            str(manifest_path.parent / Path(str(raw)).name) for raw in df["filename"]
+        ]
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).drop_duplicates(subset=["filename"], keep="last")
 
 
 def grid_from_dict(d: Dict[str, Iterable[Any]]) -> List[Dict[str, Any]]:
@@ -582,7 +615,7 @@ def solve_equilibrium_greater_real_time(
                     f"{sum_A:10.6f}  {np.nanmin(A_raw):11.3e}  {np.nanmax(A):11.3e}"
                 )
                 if last_dab is not None and need_dab:
-                    msg += f"  KBE d_ab^{kbe_dab_power:g}={last_dab_sqrt_max:.3e} tol={dab_tol:.3e}"
+                    msg += f"  KBE d_ab^{kbe_dab_power:g}={last_dab_sqrt_max:.3e}"
                 if require_dab_convergence:
                     msg += f"  require_dab={require_dab_convergence}"
                 print(msg)
@@ -1136,10 +1169,20 @@ def run_equilibrium_one(
     normalize_A: bool = True,
     verbose_every: int = 50,
     overwrite: bool = False,
+    manifest_dir: Optional[os.PathLike | str] = None,
 ) -> Optional[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = out_dir / "syk_eq_manifest.csv"
+    # By default the manifest lives next to the .npz it describes. Sweeps
+    # that give each job its own out_dir (see submit_eq.sh / run_eq_single.sh)
+    # instead pass a shared manifest_dir, so every job's row lands in one
+    # master manifest as it finishes rather than scattering across
+    # per-job subfolders that would need aggregating later. update_manifest()
+    # is flock-protected, so concurrent SLURM array jobs writing to the same
+    # master file is safe.
+    manifest_dir = Path(manifest_dir) if manifest_dir is not None else out_dir
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "syk_eq_manifest.csv"
 
     J_kernel = abs(float(J4))
     if kernel_cutoff is None:
@@ -1645,6 +1688,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     peq.add_argument("--kernel-cutoff", type=float, default=None)
     peq.add_argument("--verbose-every", type=int, default=50)
     peq.add_argument("--overwrite", action="store_true")
+    peq.add_argument("--manifest-dir", default=None, help="Directory for the shared manifest CSV, if different from --out-dir (e.g. sweeps giving each job its own --out-dir point this at the shared eq_runs/ root so every job's row lands in one master manifest as it finishes).")
 
     pkbe = sub.add_parser("kbe-one", help="Run one KBE evolution from an equilibrium npz.")
     pkbe.add_argument("--J4-i", type=float, required=True)
@@ -1702,6 +1746,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             kernel_cutoff=args.kernel_cutoff,
             verbose_every=args.verbose_every,
             overwrite=args.overwrite,
+            manifest_dir=args.manifest_dir,
         )
     elif args.cmd == "kbe-one":
         run_kbe_one(
