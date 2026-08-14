@@ -18,7 +18,6 @@ The purely pre-quench block is redundant and can be reconstructed as G_eq(t1-t2)
 """
 
 from __future__ import annotations
-
 from pathlib import Path
 from itertools import product
 from contextlib import contextmanager
@@ -32,10 +31,6 @@ import tempfile
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
-
-# Compatibility with newer NumPy: np.trapz was removed; np.trapezoid is the replacement.
-if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
-    np.trapz = np.trapezoid
 import pandas as pd
 from scipy.interpolate import interp1d
 
@@ -297,7 +292,7 @@ def _init_eq_A_F(
 
     A = 0.5 * (A + A[::-1])
     A = np.clip(A, 0.0, None)
-    sum_A = np.trapz(A, omega_real) / (2 * np.pi)
+    sum_A = np.trapezoid(A, omega_real) / (2 * np.pi)
     if sum_A > 0:
         A /= sum_A
     else:
@@ -305,7 +300,7 @@ def _init_eq_A_F(
         A = 2.0 * width0 / (omega_real**2 + width0**2)
         A = 0.5 * (A + A[::-1])
         A = np.clip(A, 0.0, None)
-        A /= np.trapz(A, omega_real) / (2 * np.pi)
+        A /= np.trapezoid(A, omega_real) / (2 * np.pi)
 
     F_w = (1.0 - nF) * A
     F_t = omega_to_time(F_w, omega_real, t_grid)
@@ -328,10 +323,6 @@ def build_kernel_R_w(
     as 1/w^4, and K^R(-w)=-conj[K^R(w)] as required for a Majorana
     quadratic kernel. This is a stable effective-action regulator; a later
     Hamiltonian/ancilla realization would need its own retuning.
-
-    Shared by the equilibrium solver and the KBE evolver so both always use
-    an identical kernel for a given (kernel_lambda, kernel_c, kernel_cutoff).
-    Returns (K_R_w, kernel_cutoff) with kernel_cutoff resolved to a float.
     """
     J_kernel = abs(float(J4))
     if kernel_lambda != 0.0 and J_kernel == 0.0:
@@ -414,7 +405,7 @@ def solve_equilibrium_greater_real_time(
     enforce_even_A: bool = True,
     clip_negative_A: bool = True,
     normalize_A: bool = True,
-    verbose_every: int = 50,
+    verbose_every: int = 100,
     compute_kbe_dab_every: int = 50,
     kbe_dab_t_cut: Optional[float] = None,
     kbe_dab_edge_skip: int = 4,
@@ -423,24 +414,20 @@ def solve_equilibrium_greater_real_time(
     A_init: Optional[np.ndarray] = None,
     t_init: Optional[np.ndarray] = None,
     G_t_init: Optional[np.ndarray] = None,
-    # ── Tuned quadratic source ────────────────────────────────────────────────
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
-    # ── Checkpointing ─────────────────────────────────────────────────────────
     checkpoint_path: Optional[Path] = None,  # path for .ckpt.npz; None = no checkpointing
-    checkpoint_every: int = 100,             # iterations between checkpoint saves
+    checkpoint_every: int = 200,             # iterations between checkpoint saves
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool, float]:
     """
     Returns: omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, final_dab_sqrt_max.
 
     Convention: F_t = i G^>(t), Ggt_t = G^>(t) = -i F_t.
 
-    Convergence is a dual gate, matching the MQ/KKTZ equilibrium solvers:
-    the mixing residual delta_F must be below tol, and -- only if
-    require_dab_convergence is set -- the real-time KBE self-consistency
-    residual d_ab (from calc_kbe_d_ab_syk_equilibrium) must also have
-    max(d_ab**kbe_dab_power) below dab_tol. d_ab is (re)computed every
+    Convergence when mixing residual delta_F is below tol, and -- if
+    require_dab_convergence -- the real-time KBE self-consistency
+    residual d_ab must also be below dab_tol. d_ab is (re)computed every
     compute_kbe_dab_every iterations and whenever delta_F first passes tol.
 
     Checkpoint files are saved to checkpoint_path (a .ckpt.npz alongside the
@@ -567,12 +554,12 @@ def solve_equilibrium_greater_real_time(
                 A_new = 0.5 * (A_new + A_new[::-1])
             if clip_negative_A:
                 A_new = np.clip(A_new, 0.0, None)
-            sum_A = np.trapz(A_new, omega_real) / (2 * np.pi)
+            sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
             if normalize_A:
                 if not np.isfinite(sum_A) or sum_A <= 0:
                     raise RuntimeError(f"Bad spectral sum at iter {it}: {sum_A}")
                 A_new = A_new / sum_A
-                sum_A = np.trapz(A_new, omega_real) / (2 * np.pi)
+                sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
 
             F_w_new   = (1.0 - nF) * A_new
             F_t_new = omega_to_time(F_w_new, omega_real, t_grid)
@@ -667,7 +654,7 @@ def solve_equilibrium_greater_real_time(
         print("\nFinal checks:")
         print("  F(0) = iG>(0) =", F_t[i0])
         print("  should be approx +0.5")
-        print("  spectral sum =", np.trapz(A, omega_real) / (2 * np.pi))
+        print("  spectral sum =", np.trapezoid(A, omega_real) / (2 * np.pi))
         print("  A evenness max |A(w)-A(-w)| =", np.max(np.abs(A - A[::-1])))
         print("  max |G>| =", np.max(np.abs(Ggt_t)))
         print(f"  converged = {converged}, final dab^{kbe_dab_power:g} = {last_dab_sqrt_max:.3e}")
@@ -786,15 +773,13 @@ def evolve_syk4_kbe(
     dt: float = 0.05,
     n_corr: int = 4,
     corr_tol: float = 1e-10,
-    progress_every: int = 50,
+    progress_every: int = 200,
     return_diagnostics: bool = False,
-    # ── Tuned quadratic source (static: same K throughout the run) ─────────────
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
-    # ── Checkpointing ─────────────────────────────────────────────────────────
     checkpoint_path: Optional[Path] = None,  # path for .ckpt.npz; None = no checkpointing
-    checkpoint_every: int = 50,              # time steps between checkpoint saves
+    checkpoint_every: int = 200,              # time steps between checkpoint saves
 ) -> Tuple[np.ndarray, np.ndarray] | Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
     """
     KBE evolution on a square real-time grid.
@@ -1247,7 +1232,7 @@ def run_equilibrium_one(
             normalize_A=normalize_A,
             verbose_every=verbose_every,
             checkpoint_path=checkpoint_path,
-            checkpoint_every=100,
+            checkpoint_every=200,
         )
         meta["converged"] = bool(converged)
         meta["final_dab_sqrt_max"] = None if not np.isfinite(final_dab_sqrt_max) else float(final_dab_sqrt_max)
@@ -1496,7 +1481,7 @@ def run_kbe_one(
             kernel_cutoff=kernel_cutoff,
             return_diagnostics=True,
             checkpoint_path=checkpoint_path,
-            checkpoint_every=50,
+            checkpoint_every=200,
         )
         n0 = int(np.asarray(diagnostics["n0"]).item())
         t_kbe[n0] = 0.0
@@ -1703,7 +1688,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--t-post-factor", type=float, default=1.0)
     pkbe.add_argument("--n-corr", type=int, default=4)
     pkbe.add_argument("--corr-tol", type=float, default=1e-10)
-    pkbe.add_argument("--progress-every", type=int, default=50)
+    pkbe.add_argument("--checkpoint-every", type=int, default=50)
     pkbe.add_argument("--kernel-lambda", type=float, default=0.0)
     pkbe.add_argument("--kernel-c", type=float, default=0.0)
     pkbe.add_argument("--kernel-cutoff", type=float, default=None)
