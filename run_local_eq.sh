@@ -12,8 +12,30 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
-J4S=(1 2 4)
-BETAS=(36 48 60 72)    
+# PARAM_MODE selects how J4/beta combinations are formed:
+#   "J4bybeta" — every J4 in J4S crossed with every BETA in BETAS
+#   "pairs"     —  (J4, BETA) pairs listed in J4_BETA_PAIRS below
+PARAM_MODE="pairs"
+
+# when PARAM_MODE=pairs 
+J4_BETA_PAIRS=(
+    "1 60"
+    "1 72"
+    "2 6"
+    "2 12"
+    "2 18"
+    "2 24"
+    "2 30"
+    "2 36"
+    "3 6"
+    "3 12"
+    "3 18"
+    "3 24"
+)
+
+# when PARAM_MODE=J4bybeta
+J4S=(1 2 3)
+BETAS=(36 48 60 72)
 
 # Equilibrium solve
 EQ_TOL=1e-12             
@@ -47,23 +69,44 @@ if ! "$PYTHON" -c "import numpy, pandas, scipy" 2>/dev/null; then
     exit 1
 fi
 
-EQ_DT=$("$PYTHON" -c "print($EQ_DT_FACTOR / $J4)")
-OMEGA_MAX=$("$PYTHON" -c "print($OMEGA_MAX_FACTOR * $J4)")
-NW=$("$PYTHON" -c "
-Nw = max(4001, int(round($NW_RATIO * $BETA * $OMEGA_MAX)))
-if Nw % 2 == 0:
-    Nw += 1
-print(Nw)
-")
-EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
-
 DAB_FLAG=""
 if [ "$REQUIRE_DAB" = "1" ]; then
     DAB_FLAG="--require-dab-convergence"
 fi
 
-for J4 in "${J4S[@]}"; do
-for BETA in "${BETAS[@]}"; do
+# Build the flat list of "J4 BETA" pairs to run, according to PARAM_MODE.
+PARAM_PAIRS=()
+case "$PARAM_MODE" in
+    J4bybeta)
+        for J4 in "${J4S[@]}"; do
+        for BETA in "${BETAS[@]}"; do
+            PARAM_PAIRS+=("$J4 $BETA")
+        done
+        done
+        ;;
+    pairs)
+        PARAM_PAIRS=("${J4_BETA_PAIRS[@]}")
+        ;;
+    *)
+        echo "Unknown PARAM_MODE '$PARAM_MODE' (expected 'J4bybeta' or 'pairs')." >&2
+        exit 1
+        ;;
+esac
+
+for PAIR in "${PARAM_PAIRS[@]}"; do
+    read -r J4 BETA <<< "$PAIR"
+
+    # dt/omega_max/Nw/kernel_cutoff depend on J4 and/or BETA, so recompute per pair.
+    EQ_DT=$("$PYTHON" -c "print($EQ_DT_FACTOR / $J4)")
+    OMEGA_MAX=$("$PYTHON" -c "print($OMEGA_MAX_FACTOR * $J4)")
+    NW=$("$PYTHON" -c "
+Nw = max(4001, int(round($NW_RATIO * $BETA * $OMEGA_MAX)))
+if Nw % 2 == 0:
+    Nw += 1
+print(Nw)
+")
+    EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
+
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     echo "============================================================"
     echo "Equilibrium solve (tuned kernel)"
@@ -87,7 +130,6 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
         $DAB_FLAG
 
     echo ""
-done
 done
 done
 
