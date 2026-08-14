@@ -2,6 +2,7 @@
 # run_local_eq.sh — run one eq-one job directly.
 #
 set -e
+set -o pipefail
 
 if [ -n "$CONDA_PREFIX" ]; then
     PYTHON=${PYTHON:-"$CONDA_PREFIX/bin/python3"}
@@ -13,7 +14,7 @@ fi
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
 # PARAM_MODE selects how J4/beta combinations are formed:
-#   "J4bybeta" — every J4 in J4S crossed with every BETA in BETAS
+#   "allJ4beta" — every J4 in J4S crossed with every BETA in BETAS
 #   "pairs"     —  (J4, BETA) pairs listed in J4_BETA_PAIRS below
 PARAM_MODE="pairs"
 
@@ -33,7 +34,7 @@ J4_BETA_PAIRS=(
     "3 24"
 )
 
-# when PARAM_MODE=J4bybeta
+# when PARAM_MODE=allJ4beta
 J4S=(1 2 3)
 BETAS=(36 48 60 72)
 
@@ -61,7 +62,7 @@ EQ_KERNEL_CUTOFF_FACTOR=0.75   # factor of J4
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 WORK_DIR="$SCRIPT_DIR/../local_runs"
-mkdir -p "$WORK_DIR/eq_runs"
+mkdir -p "$WORK_DIR/eq_runs" "$WORK_DIR/logs"
 
 if ! "$PYTHON" -c "import numpy, pandas, scipy" 2>/dev/null; then
     echo "numpy/pandas/scipy not importable via '$PYTHON'." >&2
@@ -77,7 +78,7 @@ fi
 # Build the flat list of "J4 BETA" pairs to run, according to PARAM_MODE.
 PARAM_PAIRS=()
 case "$PARAM_MODE" in
-    J4bybeta)
+    allJ4beta)
         for J4 in "${J4S[@]}"; do
         for BETA in "${BETAS[@]}"; do
             PARAM_PAIRS+=("$J4 $BETA")
@@ -88,7 +89,7 @@ case "$PARAM_MODE" in
         PARAM_PAIRS=("${J4_BETA_PAIRS[@]}")
         ;;
     *)
-        echo "Unknown PARAM_MODE '$PARAM_MODE' (expected 'J4bybeta' or 'pairs')." >&2
+        echo "Unknown PARAM_MODE '$PARAM_MODE' (expected 'allJ4beta' or 'pairs')." >&2
         exit 1
         ;;
 esac
@@ -108,6 +109,8 @@ print(Nw)
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
+    LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_lam${EQ_KERNEL_LAMBDA}.log"
+    {
     echo "============================================================"
     echo "Equilibrium solve (tuned kernel)"
     echo "  J4=$J4 beta=$BETA dt=$EQ_DT omega_max=$OMEGA_MAX Nw=$NW"
@@ -130,7 +133,9 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
         $DAB_FLAG
 
     echo ""
+    } 2>&1 | tee "$LOG_FILE"
 done
 done
 
 echo "Done. Output in: $WORK_DIR/eq_runs"
+echo "Logs in:   $WORK_DIR/logs"

@@ -213,34 +213,76 @@ def grid_trapz_weights(x: np.ndarray) -> np.ndarray:
     return trap_weights(len(x), float(x[1] - x[0]))
 
 
-def omega_to_time(X_w: np.ndarray, omega: np.ndarray, t: np.ndarray, chunk: int = 512) -> np.ndarray:
-    """x(t) = int dω/(2π) exp(-iωt) X(ω)."""
+def omega_to_time(
+    X_w: np.ndarray,
+    omega: np.ndarray,
+    t: np.ndarray,
+    chunk: int = 512,
+    phase: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """x(t) = int dω/(2π) exp(-iωt) X(ω).
+
+    `phase`, if given, is the precomputed (len(t), len(omega)) matrix
+    exp(-1j * outer(t, omega)) — see `precompute_time_omega_phase`. Passing
+    it skips rebuilding that matrix (dominated by transcendental exp()
+    calls) on every invocation, which matters when this is called
+    repeatedly on the same fixed t/omega grids, e.g. once per iteration of
+    solve_equilibrium_greater_real_time's self-consistency loop.
+    """
     omega = np.asarray(omega)
     t = np.asarray(t)
     X_w = np.asarray(X_w)
     w_omega = grid_trapz_weights(omega) / (2 * np.pi)
     X_weighted = X_w * w_omega
+    if phase is not None:
+        return phase @ X_weighted
     out = np.empty(len(t), dtype=complex)
     for a in range(0, len(t), chunk):
         tt = t[a : a + chunk]
-        phase = np.exp(-1j * np.outer(tt, omega))
-        out[a : a + chunk] = phase @ X_weighted
+        ph = np.exp(-1j * np.outer(tt, omega))
+        out[a : a + chunk] = ph @ X_weighted
     return out
 
 
-def time_to_omega(x_t: np.ndarray, t: np.ndarray, omega: np.ndarray, chunk: int = 512) -> np.ndarray:
-    """X(ω) = int dt exp(+iωt) x(t)."""
+def time_to_omega(
+    x_t: np.ndarray,
+    t: np.ndarray,
+    omega: np.ndarray,
+    chunk: int = 512,
+    phase: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """X(ω) = int dt exp(+iωt) x(t).
+
+    `phase`, if given, is the precomputed (len(omega), len(t)) matrix
+    exp(1j * outer(omega, t)) — see `precompute_time_omega_phase`. Same
+    rationale as in `omega_to_time`.
+    """
     omega = np.asarray(omega)
     t = np.asarray(t)
     x_t = np.asarray(x_t)
     w_t = grid_trapz_weights(t)
     x_weighted = x_t * w_t
+    if phase is not None:
+        return phase @ x_weighted
     out = np.empty(len(omega), dtype=complex)
     for a in range(0, len(omega), chunk):
         ww = omega[a : a + chunk]
-        phase = np.exp(1j * np.outer(ww, t))
-        out[a : a + chunk] = phase @ x_weighted
+        ph = np.exp(1j * np.outer(ww, t))
+        out[a : a + chunk] = ph @ x_weighted
     return out
+
+
+def precompute_time_omega_phase(t: np.ndarray, omega: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Precompute the dense DFT matrices shared by time_to_omega/omega_to_time.
+
+    Returns (phase_t2w, phase_w2t) for exp(1j*outer(omega,t)) and its
+    conjugate transpose exp(-1j*outer(t,omega)) respectively. Building
+    phase_w2t as a transpose of phase_t2w's conjugate avoids a second,
+    equally expensive round of exp() calls.
+    """
+    phase_t2w = np.exp(1j * np.outer(omega, t))
+    phase_w2t = phase_t2w.conj().T
+    return phase_t2w, phase_w2t
 
 
 def real_spectral_to_imag_time(
@@ -518,6 +560,12 @@ def solve_equilibrium_greater_real_time(
         theta[t_grid > 0] = 1.0
         theta[i0]           = 0.5
 
+        # t_grid/omega_real are fixed for the whole loop below, so the DFT
+        # phase matrices used by time_to_omega/omega_to_time each iteration
+        # can be built once here instead of rebuilt (via expensive exp()
+        # calls) on every one of up to max_iter calls.
+        phase_t2w, phase_w2t = precompute_time_omega_phase(t_grid, omega_real)
+
         print("\nReal-time equilibrium self-consistency")
         print(f"J2={J2}, J4={J4}, beta={beta}")
         print(
@@ -543,7 +591,7 @@ def solve_equilibrium_greater_real_time(
         for it in range(it_start, max_iter):
             iSigma_gt_t = J2**2 * F_t + J4**2 * F_t**3
             iSigma_R_t  = theta * (iSigma_gt_t + iSigma_gt_t[::-1])
-            iSigma_R_w    = time_to_omega(iSigma_R_t, t_grid, omega_real)
+            iSigma_R_w    = time_to_omega(iSigma_R_t, t_grid, omega_real, phase=phase_t2w)
             Sigma_R_w     = iSigma_R_w / (1j)
             GR_w          = 1.0 / (
                 omega_real + 1j * eta_ret + K_R_w - Sigma_R_w
@@ -562,7 +610,7 @@ def solve_equilibrium_greater_real_time(
                 sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
 
             F_w_new   = (1.0 - nF) * A_new
-            F_t_new = omega_to_time(F_w_new, omega_real, t_grid)
+            F_t_new = omega_to_time(F_w_new, omega_real, t_grid, phase=phase_w2t)
             delta_F   = np.mean(np.abs(F_t_new - F_t))
             F_t     = (1.0 - mixing) * F_t + mixing * F_t_new
             A         = A_new
@@ -1350,7 +1398,7 @@ def run_kbe_one(
     t_post_factor: Optional[float] = 1.0,
     n_corr: int = 4,
     corr_tol: float = 1e-10,
-    progress_every: int = 50,
+    checkpoint_every: int = 50,
     # Static kernel present during the KBE evolution.
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
@@ -1475,13 +1523,13 @@ def run_kbe_one(
             dt=dt,
             n_corr=n_corr,
             corr_tol=corr_tol,
-            progress_every=progress_every,
+            progress_every=checkpoint_every,
             kernel_lambda=kernel_lambda,
             kernel_c=kernel_c,
             kernel_cutoff=kernel_cutoff,
             return_diagnostics=True,
             checkpoint_path=checkpoint_path,
-            checkpoint_every=200,
+            checkpoint_every=checkpoint_every,
         )
         n0 = int(np.asarray(diagnostics["n0"]).item())
         t_kbe[n0] = 0.0
@@ -1747,7 +1795,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             t_post_factor=args.t_post_factor,
             n_corr=args.n_corr,
             corr_tol=args.corr_tol,
-            progress_every=args.progress_every,
+            checkpoint_every=args.checkpoint_every,
             kernel_lambda=args.kernel_lambda,
             kernel_c=args.kernel_c,
             kernel_cutoff=args.kernel_cutoff,
