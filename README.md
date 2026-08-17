@@ -22,9 +22,6 @@ subcommands: `eq-one` (equilibrium solve) and `kbe-one` (real-time KBE
 evolution). All the bash scripts and `run_local_eq.sh` / `run_local_kbe.sh`
 are just parameter sweeps / wrappers around these two.
 
-## Requirements
-
-`numpy`, `pandas`, `scipy`
 
 ## Two ways to run
 
