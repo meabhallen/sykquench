@@ -272,14 +272,29 @@ def time_to_omega(
     return out
 
 
-def precompute_time_omega_phase(t: np.ndarray, omega: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def precompute_time_omega_phase(
+    t: np.ndarray,
+    omega: np.ndarray,
+    max_bytes: int = 4 * 1024**3,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """Precompute the dense DFT matrices shared by time_to_omega/omega_to_time.
 
     Returns (phase_t2w, phase_w2t) for exp(1j*outer(omega,t)) and its
     conjugate transpose exp(-1j*outer(t,omega)) respectively. Building
     phase_w2t as a transpose of phase_t2w's conjugate avoids a second,
     equally expensive round of exp() calls.
+
+    These are dense (len(t), len(omega)) complex128 matrices -- O(Nt*Nw)
+    memory, held for the caller's entire run. That's cheap for modest
+    grids but can reach hundreds of GB to TB for the largest (J4, beta)
+    combinations in a sweep (Nw and Nt both grow with beta and J4). If the
+    two matrices together would exceed max_bytes, returns (None, None) so
+    callers fall back to the memory-bounded chunked computation instead of
+    caching -- slower for big grids, but won't blow up memory.
     """
+    n_bytes_total = 2 * len(t) * len(omega) * np.dtype(complex).itemsize
+    if n_bytes_total > max_bytes:
+        return None, None
     phase_t2w = np.exp(1j * np.outer(omega, t))
     phase_w2t = phase_t2w.conj().T
     return phase_t2w, phase_w2t
@@ -563,8 +578,17 @@ def solve_equilibrium_greater_real_time(
         # t_grid/omega_real are fixed for the whole loop below, so the DFT
         # phase matrices used by time_to_omega/omega_to_time each iteration
         # can be built once here instead of rebuilt (via expensive exp()
-        # calls) on every one of up to max_iter calls.
+        # calls) on every one of up to max_iter calls. Skipped for grids
+        # where caching both dense (Nt, Nw) matrices would use too much
+        # memory; see precompute_time_omega_phase.
         phase_t2w, phase_w2t = precompute_time_omega_phase(t_grid, omega_real)
+        if phase_t2w is None:
+            phase_bytes = 2 * len(t_grid) * len(omega_real) * np.dtype(complex).itemsize
+            print(
+                f"Nt={len(t_grid)}, Nw={len(omega_real)} grid too large to cache "
+                f"the DFT phase matrix ({phase_bytes / 1024**3:.1f} GB); "
+                "recomputing it each iteration instead (slower, bounded memory)."
+            )
 
         print("\nReal-time equilibrium self-consistency")
         print(f"J2={J2}, J4={J4}, beta={beta}")
