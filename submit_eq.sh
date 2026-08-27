@@ -10,7 +10,7 @@ module load python/3.11.6-gcc-11.4.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 J4S=(1)
-BETAS=(5)
+BETAS=(36 48)
 
 # Tuned-kernel source. lambda is independent (submitted crossed with every
 # (kernel_c, kernel_cutoff) pair below) -- both signs are needed since the
@@ -22,18 +22,19 @@ BETAS=(5)
 # looped independently -- an earlier version of this script (and, separately,
 # an earlier version of the analysis notebook) hit exactly this bug via
 # independent arrays silently forming the wrong (c, Lambda) combinations.
-KERNEL_LAMBDAS=(0.005 -0.005)
-KERNEL_C_CUTOFF_PAIRS=(
-    "-0.043936 0.65"
+EQ_KERNEL_LAMBDAS=(0.005 -0.005)
+EQ_KERNEL_C_CUTOFF_PAIRS=(
+    #"-0.043936 0.65"
     "-0.053648 0.75"
 )
 
-TOLS=(1e-08) 		    # tol for delta_F
-DAB_TOLS=(1e-04)        # tolerance for max(d_ab**0.5)
+TOLS=(1e-012) 		    # tol for delta_F
+DAB_TOLS=(1e-06)        # tolerance for max(d_ab**0.5)
 REQUIRE_DAB=1          	# set to 1 to require d_ab as well as delta_F for converged=True
-DTS=(0.0112)
-OMEGA_MAXS=(36)
-NWS=(20)
+EQ_DT_FACTORS=(0.0064)      # eq dt = EQ_DT_FACTOR / J4
+OMEGA_MAX_FACTORS=(36)      # omega_max = OMEGA_MAX_FACTOR * J4
+NW_RATIOS=(20)              # Nw = max(4001, round(NW_RATIO * BETA * omega_max)), forced odd
+VERBOSE_EVERY=200          # print progress every N iterations
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixed settings
@@ -54,29 +55,29 @@ COUNT=0
 for J4 in "${J4S[@]}"; do
 for BETA in "${BETAS[@]}"; do
 for TOL in "${TOLS[@]}"; do
-for KERNEL_LAMBDA in "${KERNEL_LAMBDAS[@]}"; do
-for KERNEL_C_CUTOFF in "${KERNEL_C_CUTOFF_PAIRS[@]}"; do
-read -r KERNEL_C KERNEL_CUTOFF_FACTOR <<< "$KERNEL_C_CUTOFF"
+for EQ_KERNEL_LAMBDA in "${EQ_KERNEL_LAMBDAS[@]}"; do
+for EQ_KERNEL_C_CUTOFF in "${EQ_KERNEL_C_CUTOFF_PAIRS[@]}"; do
+read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
 for DAB_TOL in "${DAB_TOLS[@]}"; do
-for T in "${DTS[@]}"; do
-for OMEGA_M in "${OMEGA_MAXS[@]}"; do
-for NWRATIO in "${NWS[@]}"; do
+for EQ_DT_FACTOR in "${EQ_DT_FACTORS[@]}"; do
+for OMEGA_MAX_FACTOR in "${OMEGA_MAX_FACTORS[@]}"; do
+for NW_RATIO in "${NW_RATIOS[@]}"; do
 
-    OMEGA_MAX=$(python3 -c "print($OMEGA_M * $J4)")
-    DT=$(python3 -c "print($T / $J4)")
+    OMEGA_MAX=$(python3 -c "print($OMEGA_MAX_FACTOR * $J4)")
+    DT=$(python3 -c "print($EQ_DT_FACTOR / $J4)")
     NW=$(python3 -c "
-Nw = max(4001, int(round($NWRATIO * $BETA * $OMEGA_MAX)))
+Nw = max(4001, int(round($NW_RATIO * $BETA * $OMEGA_MAX)))
 if Nw % 2 == 0:
     Nw += 1
 print(Nw)
 ")
-    KERNEL_CUTOFF=$(python3 -c "print($KERNEL_CUTOFF_FACTOR * $J4)")
+    EQ_KERNEL_CUTOFF=$(python3 -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
-    echo "Submitting: J4=$J4 beta=$BETA dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL kernel_lambda=$KERNEL_LAMBDA kernel_c=$KERNEL_C kernel_cutoff=$KERNEL_CUTOFF dab_tol=$DAB_TOL"
+    echo "Submitting: J4=$J4 beta=$BETA dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL kernel_lambda=$EQ_KERNEL_LAMBDA kernel_c=$EQ_KERNEL_C kernel_cutoff=$EQ_KERNEL_CUTOFF dab_tol=$DAB_TOL"
 
     sbatch \
-    	--job-name="syk_eq_J-${J4}_beta-${BETA}_lam-${KERNEL_LAMBDA}_c-${KERNEL_C}_Lam-${KERNEL_CUTOFF}" \
-    	--export=ALL,J4=$J4,BETA=$BETA,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB \
+    	--job-name="syk_eq_J-${J4}_beta-${BETA}_lam-${EQ_KERNEL_LAMBDA}_c-${EQ_KERNEL_C}_Lam-${EQ_KERNEL_CUTOFF}" \
+    	--export=ALL,J4=$J4,BETA=$BETA,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB,VERBOSE_EVERY=$VERBOSE_EVERY \
     	"$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))

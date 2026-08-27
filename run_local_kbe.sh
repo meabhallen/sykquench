@@ -18,7 +18,7 @@ fi
 # PARAM_MODE selects how J4/beta combinations are formed:
 #   "allJ4beta" — every J4 in J4S crossed with every BETA in BETAS
 #   "pairs"     —  (J4, BETA) pairs listed in J4_BETA_PAIRS below
-PARAM_MODE="pairs"
+PARAM_MODE="allJ4beta"
 
 # when PARAM_MODE=pairs 
 J4_BETA_PAIRS=(
@@ -37,12 +37,12 @@ J4_BETA_PAIRS=(
 )
 
 # when PARAM_MODE=allJ4beta
-J4S=(1 2 3)
-BETAS=(36 48 60 72)
+J4S=(1) # 2 3)
+BETAS=(36 48) # 60 72)
           
 
 # KBE evolution
-KBE_DTS=(0.05 0.025)            # time step size
+KBE_DTS=(0.025) # 0.025)            # time step size
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
 CORR_TOL_FACTOR=1e-12           # precision required at each KBE step = CORR_TOL_FACTOR/BETA
@@ -57,7 +57,7 @@ KERNEL_CUTOFF_FACTOR=1.0    # factor of J4; inactive when KERNEL_LAMBDA=0
 # Initial-state equilibrium kernel using tuned delta_star(Lambda). Pick from tuned pairs:
 # (delta*, Lambda) = (c, cutoff_factor) in {(-0.043936, 0.65), (-0.053648, 0.75)}
 # Both signs of lambda are run below; real-time analysis reads off D_lambda = (G_+ - G_-)/(2*lambda)
-EQ_KERNEL_LAMBDA_MAG=0.0025
+EQ_KERNEL_LAMBDA_MAG=0.005
 EQ_KERNEL_C=-0.053648
 EQ_KERNEL_CUTOFF_FACTOR=0.75 # factor of J4
 
@@ -65,7 +65,8 @@ EQ_KERNEL_CUTOFF_FACTOR=0.75 # factor of J4
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-WORK_DIR="$SCRIPT_DIR/../local_runs"
+#WORK_DIR="$SCRIPT_DIR/../local_runs"
+WORK_DIR="$SCRIPT_DIR/../syk_sims"
 mkdir -p "$WORK_DIR/kbe_runs" "$WORK_DIR/logs"
 
 
@@ -102,7 +103,7 @@ for PAIR in "${PARAM_PAIRS[@]}"; do
 
 
 for KBE_DT in "${KBE_DTS[@]}"; do
-    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT / 20)")
+    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT / 20 * 12)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_lam${EQ_KERNEL_LAMBDA}.log"

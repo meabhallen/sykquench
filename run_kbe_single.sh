@@ -35,7 +35,7 @@ KERNEL_LAMBDA=${KERNEL_LAMBDA:-0.0}
 KERNEL_C=${KERNEL_C:-0.0}
 EQ_KERNEL_LAMBDA=${EQ_KERNEL_LAMBDA:-0.0}
 EQ_KERNEL_C=${EQ_KERNEL_C:-0.0}
-PROGRESS_EVERY=${PROGRESS_EVERY:-50}
+CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 
 TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)"
 OUT_DIR="kbe_runs/$TAG"
@@ -101,7 +101,7 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --t-post-factor "$T_POST_FACTOR"  \
     --corr-tol      "$CORR_TOL"       \
     --n-corr        "$N_CORR"         \
-    --progress-every "$PROGRESS_EVERY" \
+    --checkpoint-every "$CHECKPOINT_EVERY" \
     --kernel-lambda "$KERNEL_LAMBDA"  \
     --kernel-c      "$KERNEL_C"       \
     --eq-kernel-lambda "$EQ_KERNEL_LAMBDA" \
