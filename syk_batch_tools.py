@@ -34,6 +34,10 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
+# np.trapezoid was added in NumPy 2.0 (np.trapz's replacement); older
+# clusters still ship pre-2.0 NumPy where only np.trapz exists.
+_trapz = getattr(np, "trapezoid", np.trapz)
+
 
 # ============================================================
 # General helper utilities
@@ -349,7 +353,7 @@ def _init_eq_A_F(
 
     A = 0.5 * (A + A[::-1])
     A = np.clip(A, 0.0, None)
-    sum_A = np.trapezoid(A, omega_real) / (2 * np.pi)
+    sum_A = _trapz(A, omega_real) / (2 * np.pi)
     if sum_A > 0:
         A /= sum_A
     else:
@@ -357,7 +361,7 @@ def _init_eq_A_F(
         A = 2.0 * width0 / (omega_real**2 + width0**2)
         A = 0.5 * (A + A[::-1])
         A = np.clip(A, 0.0, None)
-        A /= np.trapezoid(A, omega_real) / (2 * np.pi)
+        A /= _trapz(A, omega_real) / (2 * np.pi)
 
     F_w = (1.0 - nF) * A
     F_t = omega_to_time(F_w, omega_real, t_grid)
@@ -626,12 +630,12 @@ def solve_equilibrium_greater_real_time(
                 A_new = 0.5 * (A_new + A_new[::-1])
             if clip_negative_A:
                 A_new = np.clip(A_new, 0.0, None)
-            sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
+            sum_A = _trapz(A_new, omega_real) / (2 * np.pi)
             if normalize_A:
                 if not np.isfinite(sum_A) or sum_A <= 0:
                     raise RuntimeError(f"Bad spectral sum at iter {it}: {sum_A}")
                 A_new = A_new / sum_A
-                sum_A = np.trapezoid(A_new, omega_real) / (2 * np.pi)
+                sum_A = _trapz(A_new, omega_real) / (2 * np.pi)
 
             F_w_new   = (1.0 - nF) * A_new
             F_t_new = omega_to_time(F_w_new, omega_real, t_grid, phase=phase_w2t)
@@ -726,7 +730,7 @@ def solve_equilibrium_greater_real_time(
         print("\nFinal checks:")
         print("  F(0) = iG>(0) =", F_t[i0])
         print("  should be approx +0.5")
-        print("  spectral sum =", np.trapezoid(A, omega_real) / (2 * np.pi))
+        print("  spectral sum =", _trapz(A, omega_real) / (2 * np.pi))
         print("  A evenness max |A(w)-A(-w)| =", np.max(np.abs(A - A[::-1])))
         print("  max |G>| =", np.max(np.abs(Ggt_t)))
         print(f"  converged = {converged}, final dab^{kbe_dab_power:g} = {last_dab_sqrt_max:.3e}")
