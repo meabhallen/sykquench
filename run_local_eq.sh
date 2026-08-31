@@ -16,7 +16,7 @@ fi
 # PARAM_MODE selects how J4/beta combinations are formed:
 #   "allJ4beta" — every J4 in J4S crossed with every BETA in BETAS
 #   "pairs"     —  (J4, BETA) pairs listed in J4_BETA_PAIRS below
-PARAM_MODE="pairs"
+PARAM_MODE="allJ4beta"
 
 # when PARAM_MODE=pairs 
 J4_BETA_PAIRS=(
@@ -35,7 +35,7 @@ J4_BETA_PAIRS=(
 )
 
 # when PARAM_MODE=allJ4beta
-J4S=(1 2 3)
+J4S=(1)
 BETAS=(36 48 60 72)
 
 # Equilibrium solve
@@ -54,7 +54,7 @@ VERBOSE_EVERY=200         # print progress every N iterations
 # real-time analysis reads off the odd-in-lambda response
 # D_lambda = (G_+ - G_-)/(2*lambda), which needs a matched +/-lambda pair.
 EQ_KERNEL_LAMBDA_MAG=0.0025
-EQ_KERNEL_C=-0.053648
+EQ_KERNEL_C=-0.5625 #maps to ancillary dimer model
 EQ_KERNEL_CUTOFF_FACTOR=0.75   # factor of J4
 
 # ─────────────────────────────────────────────────────────────────────────────
