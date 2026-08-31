@@ -65,8 +65,8 @@ EQ_KERNEL_CUTOFF_FACTOR=0.75 # factor of J4
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-#WORK_DIR="$SCRIPT_DIR/../local_runs"
-WORK_DIR="$SCRIPT_DIR/../syk_sims"
+WORK_DIR="$SCRIPT_DIR/../local_runs"
+#WORK_DIR="$SCRIPT_DIR/../syk_sims"
 mkdir -p "$WORK_DIR/kbe_runs" "$WORK_DIR/logs"
 
 
