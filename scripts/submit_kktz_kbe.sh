@@ -15,20 +15,20 @@ J_IS=(1.0)
 J_FS=(1.0)
 
 # Fractions are converted to decimal values below.
-ALPHA_IS=(0) #1/18 1/9 1/3)
+ALPHA_IS=(0.01 0.02 0.03)
 
 MU_IS=(0.0)
 MU_FS=(0.0)
-BETAS=(12) # 10 14)
+BETAS=(30) # 10 14)
 
 DT=0.05
 T_PRE_FACTOR=2.0
-T_POST_FACTOR=2.0
+T_POST_FACTOR=1.0
 
-CORR_TOL=1e-8
-N_CORR=4 #25
-ITERATIONS=50 #1000
-CHECKPOINT_EVERY=250
+CORR_TOL_FACTOR=1e-9
+N_CORR=25
+ITERATIONS=1000
+CHECKPOINT_EVERY=100
 
 # Equilibrium-file lookup filters.
 # These must match the corresponding equilibrium calculations.
@@ -61,7 +61,6 @@ from fractions import Fraction
 print(float(Fraction('$ALPHA_I_VALUE')))
 ")
 
-    # Keep alpha fixed during the quench.
     ALPHA_F="$ALPHA_I"
 
     EQ_NW=$(python3 -c "
@@ -73,7 +72,7 @@ if Nw % 2 == 0:
     Nw += 1
 print(Nw)
 ")
-
+    CORR_TOL=$(python3 -c "print($CORR_TOL_FACTOR / $BETA * $DT * 20 * 12)")
     echo "Submitting KKTZ KBE:"
     echo "  J:       $J_I -> $J_F"
     echo "  alpha:   $ALPHA_I -> $ALPHA_F"
