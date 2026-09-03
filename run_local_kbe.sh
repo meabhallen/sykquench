@@ -38,7 +38,7 @@ J4_BETA_PAIRS=(
 
 # when PARAM_MODE=allJ4beta
 J4S=(1) # 2 3)
-BETAS=(36 48 60 72)
+BETAS=(48 60 72)
           
 
 # KBE evolution
@@ -103,7 +103,7 @@ for PAIR in "${PARAM_PAIRS[@]}"; do
 
 
 for KBE_DT in "${KBE_DTS[@]}"; do
-    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA / $BETA * $KBE_DT / 20 * 12)")
+    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA / $BETA * $KBE_DT / 20 * 12 * 36)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_lam${EQ_KERNEL_LAMBDA}.log"
