@@ -38,11 +38,11 @@ J4_BETA_PAIRS=(
 
 # when PARAM_MODE=allJ4beta
 J4S=(1) # 2 3)
-BETAS=(48 60 72)
+BETAS=(36 48 60 72)
           
 
 # KBE evolution
-KBE_DTS=(0.025) # 0.025)            # time step size
+KBE_DT_FACTORS=(0.025)          # time step size
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
 CORR_TOL_FACTOR=1e-12           # precision required at each KBE step = CORR_TOL_FACTOR/BETA
@@ -102,8 +102,9 @@ for PAIR in "${PARAM_PAIRS[@]}"; do
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
 
-for KBE_DT in "${KBE_DTS[@]}"; do
-    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA / $BETA * $KBE_DT / 20 * 12 * 36)")
+for KBE_DT_FACTOR in "${KBE_DT_FACTORS[@]}"; do
+    KBE_DT=$("$PYTHON" -c "print($KBE_DT_FACTOR / $BETA**0.5 * 5)")
+    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT * 40 * 48)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_lam${EQ_KERNEL_LAMBDA}.log"

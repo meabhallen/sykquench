@@ -53,7 +53,7 @@ VERBOSE_EVERY=200         # print progress every N iterations
 # Both signs of lambda are run below (matches submit_eq.sh): downstream
 # real-time analysis reads off the odd-in-lambda response
 # D_lambda = (G_+ - G_-)/(2*lambda), which needs a matched +/-lambda pair.
-EQ_KERNEL_LAMBDA_MAG=0.0025
+EQ_KERNEL_LAMBDA_MAG=0.00125
 EQ_KERNEL_C=-0.5625 #maps to ancillary dimer model
 EQ_KERNEL_CUTOFF_FACTOR=0.75   # factor of J4
 
