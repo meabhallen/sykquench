@@ -57,9 +57,9 @@ for EQ_KERNEL_C_CUTOFF in "${EQ_KERNEL_C_CUTOFF_PAIRS[@]}"; do
 read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
     
     
-    DT=$("$PYTHON" -c "print($DT_FACTOR / $BETA**0.5 * 5)")
+    DT=$(python3 -c "print($DT_FACTOR / $BETA**0.5 * 5)")
     
-    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $DT * 40 * 48)")
+    CORR_TOL=$(python3 -c "print($CORR_TOL_FACTOR / $BETA * $DT * 40 * 48)")
     
     KERNEL_CUTOFF=$(python3 -c "print($KERNEL_CUTOFF_FACTOR * $J4_I)")
     
