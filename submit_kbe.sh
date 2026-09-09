@@ -36,6 +36,12 @@ EQ_KERNEL_C_CUTOFF_PAIRS=(
     "-0.053648 0.75"
 )
 
+# Set to 1 to also accept eq_runs entries that hit max_iter without meeting
+# dab_tol (status=not_converged in syk_eq_manifest.csv), instead of requiring
+# full convergence (status=ok). Useful when d_ab convergence is slower than
+# expected at a given beta but the delta_F-converged state is good enough.
+EQ_ALLOW_NOT_CONVERGED=1
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 WORK_DIR=/global/scratch/users/$USER/sykquench
@@ -69,7 +75,7 @@ read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
 
     sbatch \
         --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_eqlam-${EQ_KERNEL_LAMBDA}" \
-        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF \
+        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED \
         "$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))

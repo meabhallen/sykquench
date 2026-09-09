@@ -50,6 +50,11 @@ if [ -n "${EQ_KERNEL_CUTOFF:-}" ]; then
     EQ_KERNEL_CUTOFF_FLAG="--eq-kernel-cutoff $EQ_KERNEL_CUTOFF"
 fi
 
+EQ_ALLOW_NOT_CONVERGED_FLAG=""
+if [ "${EQ_ALLOW_NOT_CONVERGED:-0}" = "1" ]; then
+    EQ_ALLOW_NOT_CONVERGED_FLAG="--eq-allow-not-converged"
+fi
+
 echo "Job $SLURM_JOB_ID: J4_i=$J4_I J4_f=$J4_F beta=$BETA dt=$DT"
 echo "t_pre_factor=$T_PRE_FACTOR t_post_factor=$T_POST_FACTOR"
 echo "evolution kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=${KERNEL_CUTOFF:-auto}"
@@ -108,7 +113,7 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --eq-kernel-c   "$EQ_KERNEL_C"    \
     --eq-dir        "$WORK_DIR/eq_runs"  \
     --out-dir       "$OUT_DIR"        \
-    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG &
+    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG &
 
 PY_PID=$!
 wait "$PY_PID"

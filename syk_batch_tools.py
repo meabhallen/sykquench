@@ -1354,13 +1354,23 @@ def find_eq_file(
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
     prefer_smallest_dt: bool = True,
+    allow_not_converged: bool = False,
 ) -> pd.Series:
-    """Select a converged equilibrium row, including its preparation kernel."""
+    """Select an equilibrium row, including its preparation kernel.
+
+    By default only rows that fully converged (status == "ok") are eligible.
+    allow_not_converged also accepts rows that hit max_iter without meeting
+    the d_ab tolerance (status == "not_converged") -- the .npz for those is
+    still a valid, delta_F-converged equilibrium state, just not one that met
+    the stricter d_ab self-consistency check. Rows that errored out entirely
+    (status == "failed") are never eligible.
+    """
     if eq_manifest.empty:
         raise FileNotFoundError("Equilibrium manifest is empty.")
 
+    allowed_status = {"ok", "not_converged"} if allow_not_converged else {"ok"}
     good = eq_manifest[
-        (eq_manifest["status"] == "ok")
+        eq_manifest["status"].isin(allowed_status)
         & np.isclose(eq_manifest["J2"].astype(float), float(J2))
         & np.isclose(eq_manifest["J4"].astype(float), float(J4))
         & np.isclose(eq_manifest["beta"].astype(float), float(beta))
@@ -1368,7 +1378,9 @@ def find_eq_file(
 
     # Exclude old rows that were labelled ok despite explicitly recording
     # converged=False. Missing convergence metadata remains legacy-compatible.
-    if "converged" in good.columns:
+    # (Skipped when allow_not_converged, since those rows are converged=False
+    # by construction -- that's the whole point of opting in.)
+    if not allow_not_converged and "converged" in good.columns:
         converged_text = good["converged"].astype(str).str.lower()
         good = good[
             good["converged"].isna()
@@ -1405,10 +1417,17 @@ def find_eq_file(
             f"kernel_c={kernel_c}, kernel_cutoff={kernel_cutoff}"
         )
 
-    if prefer_smallest_dt:
-        good = good.sort_values(["dt", "tol", "Nw"], ascending=[True, True, False])
+    if allow_not_converged:
+        # Prefer a fully-converged row over a not_converged one before
+        # falling back to the usual dt/tol/Nw tie-breaks.
+        good["_status_rank"] = (good["status"] != "ok").astype(int)
+        sort_cols = ["_status_rank"]
     else:
-        good = good.sort_values(["tol", "Nw"], ascending=[True, False])
+        sort_cols = []
+    if prefer_smallest_dt:
+        good = good.sort_values(sort_cols + ["dt", "tol", "Nw"], ascending=[True] * len(sort_cols) + [True, True, False])
+    else:
+        good = good.sort_values(sort_cols + ["tol", "Nw"], ascending=[True] * len(sort_cols) + [True, False])
     return good.iloc[0]
 
 
@@ -1438,6 +1457,7 @@ def run_kbe_one(
     eq_dir: os.PathLike | str = "eq_runs",
     out_dir: os.PathLike | str = "kbe_runs",
     eq_file: Optional[os.PathLike | str] = None,
+    eq_allow_not_converged: bool = False,
     overwrite: bool = False,
     save_diagnostics: bool = True,
 ) -> Optional[Path]:
@@ -1467,6 +1487,7 @@ def run_kbe_one(
             kernel_lambda=eq_kernel_lambda,
             kernel_c=eq_kernel_c,
             kernel_cutoff=eq_kernel_cutoff,
+            allow_not_converged=eq_allow_not_converged,
         )
         eq_file = eq_row["filename"]
     eq_file = Path(eq_file)
@@ -1774,6 +1795,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--eq-dir", default="eq_runs")
     pkbe.add_argument("--out-dir", default="kbe_runs")
     pkbe.add_argument("--eq-file", default=None)
+    pkbe.add_argument("--eq-allow-not-converged", action="store_true", help="Also accept eq rows that hit max_iter without meeting dab_tol (status=not_converged), not just fully converged ones.")
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
 
@@ -1833,6 +1855,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             eq_dir=args.eq_dir,
             out_dir=args.out_dir,
             eq_file=args.eq_file,
+            eq_allow_not_converged=args.eq_allow_not_converged,
             overwrite=args.overwrite,
             save_diagnostics=not args.no_diagnostics,
         )
