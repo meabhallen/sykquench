@@ -11,7 +11,10 @@ module load python/3.11.6-gcc-11.4.0
 
 J4_IS=(1)           # initial J4 values
 J4_FS=(1)        # final J4 values (quench targets)
-BETAS=(36) 
+BETAS=(36)
+MU_FS=(0.0)         # H_M mass/spin deformation quench target; 0 = off (mu_i is read from the
+                    # selected eq file itself, not set here -- see EQ_MUS below)
+EQ_MUS=(0.0)        # mu used to select which equilibrium file to quench from
 DT_FACTOR=0.025
 T_PRE_FACTOR=2.0
 T_POST_FACTOR=1.0
@@ -55,6 +58,8 @@ COUNT=0
 for J4_I in "${J4_IS[@]}"; do
 for J4_F in "${J4_FS[@]}"; do
 for BETA in "${BETAS[@]}"; do
+for MU_F in "${MU_FS[@]}"; do
+for EQ_MU in "${EQ_MUS[@]}"; do
 for KERNEL_LAMBDA in "${KERNEL_LAMBDAS[@]}"; do
 for KERNEL_C in "${KERNEL_CS[@]}"; do
 for KERNEL_CUTOFF_FACTOR in "${KERNEL_CUTOFFS[@]}"; do
@@ -71,15 +76,17 @@ read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
     
     EQ_KERNEL_CUTOFF=$(python3 -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4_I)")
 
-    echo "Submitting: J4_i=$J4_I J4_f=$J4_F beta=$BETA kernel_lambda=$KERNEL_LAMBDA kernel_c=$KERNEL_C kernel_cutoff=$KERNEL_CUTOFF eq_kernel_lambda=$EQ_KERNEL_LAMBDA eq_kernel_c=$EQ_KERNEL_C eq_kernel_cutoff=$EQ_KERNEL_CUTOFF corr_tol=$CORR_TOL"
+    echo "Submitting: J4_i=$J4_I J4_f=$J4_F beta=$BETA mu_f=$MU_F eq_mu=$EQ_MU kernel_lambda=$KERNEL_LAMBDA kernel_c=$KERNEL_C kernel_cutoff=$KERNEL_CUTOFF eq_kernel_lambda=$EQ_KERNEL_LAMBDA eq_kernel_c=$EQ_KERNEL_C eq_kernel_cutoff=$EQ_KERNEL_CUTOFF corr_tol=$CORR_TOL"
 
     sbatch \
-        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_eqlam-${EQ_KERNEL_LAMBDA}" \
-        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED \
+        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}" \
+        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED \
         "$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))
 
+done
+done
 done
 done
 done

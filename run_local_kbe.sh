@@ -42,6 +42,8 @@ BETAS=(36 48 60 72)
           
 
 # KBE evolution
+MU_F=0.0                        # H_M mass/spin deformation quench target; 0 = off
+EQ_MU=0.0                       # mu used to select which equilibrium file to quench from
 KBE_DT_FACTORS=(0.025)          # time step size
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
@@ -107,11 +109,11 @@ for KBE_DT_FACTOR in "${KBE_DT_FACTORS[@]}"; do
     CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT * 40 * 48)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
-    LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_lam${EQ_KERNEL_LAMBDA}.log"
+    LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_muf${MU_F}_eqmu${EQ_MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
     echo "============================================================"
     echo "KBE quench (kernel-free evolution, tuned initial state)"
-    echo "  J4_i=J4_f=$J4 beta=$BETA dt=$KBE_DT"
+    echo "  J4_i=J4_f=$J4 beta=$BETA dt=$KBE_DT mu_f=$MU_F eq_mu=$EQ_MU"
     echo "  evolution kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=$KERNEL_CUTOFF"
     echo "  eq-selection kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=$EQ_KERNEL_CUTOFF"
     echo "============================================================"
@@ -121,6 +123,8 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
         --J4-i          "$J4"            \
         --J4-f          "$J4"            \
         --beta          "$BETA"          \
+        --mu-f          "$MU_F"          \
+        --eq-mu         "$EQ_MU"         \
         --dt            "$KBE_DT"        \
         --t-pre-factor  "$T_PRE_FACTOR"  \
         --t-post-factor "$T_POST_FACTOR" \

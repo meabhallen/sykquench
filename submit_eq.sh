@@ -11,6 +11,8 @@ module load python/3.11.6-gcc-11.4.0
 
 J4S=(1)
 BETAS=(36 48)
+MUS=(0.0)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now checks
+            # BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals when mu != 0.
 
 # Tuned-kernel source. lambda is independent (submitted crossed with every
 # (kernel_c, kernel_cutoff) pair below) -- both signs are needed since the
@@ -54,6 +56,7 @@ COUNT=0
 
 for J4 in "${J4S[@]}"; do
 for BETA in "${BETAS[@]}"; do
+for MU in "${MUS[@]}"; do
 for TOL in "${TOLS[@]}"; do
 for EQ_KERNEL_LAMBDA in "${EQ_KERNEL_LAMBDAS[@]}"; do
 for EQ_KERNEL_C_CUTOFF in "${EQ_KERNEL_C_CUTOFF_PAIRS[@]}"; do
@@ -73,15 +76,16 @@ print(Nw)
 ")
     EQ_KERNEL_CUTOFF=$(python3 -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
-    echo "Submitting: J4=$J4 beta=$BETA dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL kernel_lambda=$EQ_KERNEL_LAMBDA kernel_c=$EQ_KERNEL_C kernel_cutoff=$EQ_KERNEL_CUTOFF dab_tol=$DAB_TOL"
+    echo "Submitting: J4=$J4 beta=$BETA mu=$MU dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL kernel_lambda=$EQ_KERNEL_LAMBDA kernel_c=$EQ_KERNEL_C kernel_cutoff=$EQ_KERNEL_CUTOFF dab_tol=$DAB_TOL"
 
     sbatch \
-    	--job-name="syk_eq_J-${J4}_beta-${BETA}_lam-${EQ_KERNEL_LAMBDA}_c-${EQ_KERNEL_C}_Lam-${EQ_KERNEL_CUTOFF}" \
-    	--export=ALL,J4=$J4,BETA=$BETA,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB,VERBOSE_EVERY=$VERBOSE_EVERY \
+    	--job-name="syk_eq_J-${J4}_beta-${BETA}_mu-${MU}_lam-${EQ_KERNEL_LAMBDA}_c-${EQ_KERNEL_C}_Lam-${EQ_KERNEL_CUTOFF}" \
+    	--export=ALL,J4=$J4,BETA=$BETA,MU=$MU,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB,VERBOSE_EVERY=$VERBOSE_EVERY \
     	"$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))
 
+done
 done
 done
 done

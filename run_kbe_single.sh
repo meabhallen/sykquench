@@ -35,9 +35,11 @@ KERNEL_LAMBDA=${KERNEL_LAMBDA:-0.0}
 KERNEL_C=${KERNEL_C:-0.0}
 EQ_KERNEL_LAMBDA=${EQ_KERNEL_LAMBDA:-0.0}
 EQ_KERNEL_C=${EQ_KERNEL_C:-0.0}
+MU_F=${MU_F:-0.0}
+EQ_MU=${EQ_MU:-0.0}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 
-TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)"
+TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)_muf_$(safe $MU_F)_eqmu_$(safe $EQ_MU)"
 OUT_DIR="kbe_runs/$TAG"
 
 KERNEL_CUTOFF_FLAG=""
@@ -55,7 +57,7 @@ if [ "${EQ_ALLOW_NOT_CONVERGED:-0}" = "1" ]; then
     EQ_ALLOW_NOT_CONVERGED_FLAG="--eq-allow-not-converged"
 fi
 
-echo "Job $SLURM_JOB_ID: J4_i=$J4_I J4_f=$J4_F beta=$BETA dt=$DT"
+echo "Job $SLURM_JOB_ID: J4_i=$J4_I J4_f=$J4_F beta=$BETA dt=$DT mu_f=$MU_F eq_mu=$EQ_MU"
 echo "t_pre_factor=$T_PRE_FACTOR t_post_factor=$T_POST_FACTOR"
 echo "evolution kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=${KERNEL_CUTOFF:-auto}"
 echo "eq-selection kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=${EQ_KERNEL_CUTOFF:-auto}"
@@ -111,6 +113,8 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --kernel-c      "$KERNEL_C"       \
     --eq-kernel-lambda "$EQ_KERNEL_LAMBDA" \
     --eq-kernel-c   "$EQ_KERNEL_C"    \
+    --mu-f          "$MU_F"           \
+    --eq-mu         "$EQ_MU"          \
     --eq-dir        "$WORK_DIR/eq_runs"  \
     --out-dir       "$OUT_DIR"        \
     $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG &

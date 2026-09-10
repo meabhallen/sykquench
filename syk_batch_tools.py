@@ -453,6 +453,7 @@ def solve_equilibrium_greater_real_time(
     J2: float,
     J4: float,
     beta: float,
+    mu: float = 0.0,
     omega_max: float = 8.0,
     Nw: int = 4097,
     t_max: Optional[float] = None,
@@ -480,16 +481,41 @@ def solve_equilibrium_greater_real_time(
     kernel_cutoff: Optional[float] = None,
     checkpoint_path: Optional[Path] = None,  # path for .ckpt.npz; None = no checkpointing
     checkpoint_every: int = 200,             # iterations between checkpoint saves
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool, float]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool, float, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Returns: omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, final_dab_sqrt_max.
+    Returns: omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged,
+    final_dab_sqrt_max, A_off, Ggt_off_t, GRoff_w.
 
     Convention: F_t = i G^>(t), Ggt_t = G^>(t) = -i F_t.
 
+    mu != 0 turns on the H_M = i*mu*sum_k s_k psi_{2k-1}psi_{2k} mass/spin
+    deformation (Nosaka-Numasawa, JHEP08(2020)081). H_M is a deterministic
+    bilinear, not part of the disorder average, so Sigma_R is built from the
+    diagonal sector exactly as at mu=0; only the final map from the "bare"
+    retarded denominator a(w) = w + i*eta + K_R(w) - Sigma_R(w) to G^R(w)
+    changes, from 1/a(w) to a(w)/(a(w)^2-mu^2) (which reduces to 1/a(w) at
+    mu=0 -- same formula, no branch needed), plus a new off-diagonal
+    Goff^R(w) = -i*mu/(a(w)^2-mu^2) companion. Unlike the diagonal channel,
+    Ggt_off_t is the *direct* inverse transform of (1-nF)*A_off with
+    A_off = 2*Re[Goff^R(w)] -- no extra -i prefactor, and -2*Im(.) does NOT
+    apply here (Goff pairs two *different* Majoranas, so the standard
+    Hermitian-correlator FDT shortcut doesn't hold); see
+    evolve_syk4_kbe_massdef's docstring for the full derivation and its
+    cross-checks against the exact free (J4=0) two-level solution. A_off is
+    all zeros at mu=0.
+
     Convergence when mixing residual delta_F is below tol, and -- if
-    require_dab_convergence -- the real-time KBE self-consistency
-    residual d_ab must also be below dab_tol. d_ab is (re)computed every
+    require_dab_convergence -- the real-time KBE self-consistency residual
+    d_ab must also be below dab_tol. d_ab is (re)computed every
     compute_kbe_dab_every iterations and whenever delta_F first passes tol.
+    At mu=0 this is the plain diagonal-only residual from
+    calc_kbe_d_ab_syk_equilibrium. At mu != 0 it is the *coupled* check from
+    calc_kbe_d_ab_syk_equilibrium_massdef: BOTH the diagonal-sector residual
+    d_ab_diag and the off-diagonal-sector residual d_ab_off (which verifies
+    Goff, not just G, actually solves the discretized real-time KBE the
+    quench evolver uses) must independently be below dab_tol before the
+    solver is marked converged -- last_dab_sqrt_max is then
+    max(d_ab_diag, d_ab_off)**kbe_dab_power, i.e. the worse of the two.
 
     Checkpoint files are saved to checkpoint_path (a .ckpt.npz alongside the
     output npz) every checkpoint_every iterations. If checkpoint_path exists
@@ -497,6 +523,7 @@ def solve_equilibrium_greater_real_time(
     last fully completed iteration before exiting. The checkpoint is deleted
     only after actual convergence.
     """
+    mu = float(mu)
     if t_max is None:
         t_max = max(80.0, 5.0 * beta)
 
@@ -595,7 +622,7 @@ def solve_equilibrium_greater_real_time(
             )
 
         print("\nReal-time equilibrium self-consistency")
-        print(f"J2={J2}, J4={J4}, beta={beta}")
+        print(f"J2={J2}, J4={J4}, beta={beta}, mu={mu}")
         print(
             "kernel: "
             f"lambda={kernel_lambda}, c={kernel_c}, "
@@ -616,14 +643,15 @@ def solve_equilibrium_greater_real_time(
         converged = False
         last_dab = None
         last_dab_sqrt_max = np.inf
+        last_dab_diag_sqrt = np.inf
+        last_dab_off_sqrt = np.inf
         for it in range(it_start, max_iter):
             iSigma_gt_t = J2**2 * F_t + J4**2 * F_t**3
             iSigma_R_t  = theta * (iSigma_gt_t + iSigma_gt_t[::-1])
             iSigma_R_w    = time_to_omega(iSigma_R_t, t_grid, omega_real, phase=phase_t2w)
             Sigma_R_w     = iSigma_R_w / (1j)
-            GR_w          = 1.0 / (
-                omega_real + 1j * eta_ret + K_R_w - Sigma_R_w
-            )
+            a_w           = omega_real + 1j * eta_ret + K_R_w - Sigma_R_w
+            GR_w          = a_w / (a_w**2 - mu**2)  # reduces to 1/a_w at mu=0
             A_raw         = -2.0 * np.imag(GR_w)
             A_new         = A_raw.copy()
             if enforce_even_A:
@@ -657,20 +685,48 @@ def solve_equilibrium_greater_real_time(
                 need_dab = True
 
             if need_dab:
-                last_dab = calc_kbe_d_ab_syk_equilibrium(
-                    t=t_grid,
-                    Ggt=Ggt_current,
-                    J2=J2,
-                    J4=J4,
-                    kernel_lambda=kernel_lambda,
-                    kernel_c=kernel_c,
-                    kernel_cutoff=kernel_cutoff,
-                    omega=omega_real,
-                    t_cut=kbe_dab_t_cut,
-                    edge_skip=kbe_dab_edge_skip,
-                    return_details=False,
-                )
-                last_dab_sqrt_max = float(last_dab ** kbe_dab_power)
+                if mu == 0.0:
+                    last_dab = calc_kbe_d_ab_syk_equilibrium(
+                        t=t_grid,
+                        Ggt=Ggt_current,
+                        J2=J2,
+                        J4=J4,
+                        kernel_lambda=kernel_lambda,
+                        kernel_c=kernel_c,
+                        kernel_cutoff=kernel_cutoff,
+                        omega=omega_real,
+                        t_cut=kbe_dab_t_cut,
+                        edge_skip=kbe_dab_edge_skip,
+                        return_details=False,
+                    )
+                    last_dab_sqrt_max = float(last_dab ** kbe_dab_power)
+                    last_dab_diag_sqrt = last_dab_sqrt_max
+                    last_dab_off_sqrt = 0.0
+                else:
+                    GRoff_w_current = -1j * mu / (a_w**2 - mu**2)
+                    A_off_current = 2.0 * np.real(GRoff_w_current)
+                    Ggt_off_current = omega_to_time(
+                        (1.0 - nF) * A_off_current, omega_real, t_grid, phase=phase_w2t
+                    )
+                    dab_diag, dab_off = calc_kbe_d_ab_syk_equilibrium_massdef(
+                        t=t_grid,
+                        Ggt=Ggt_current,
+                        Goff_t=Ggt_off_current,
+                        mu=mu,
+                        J2=J2,
+                        J4=J4,
+                        kernel_lambda=kernel_lambda,
+                        kernel_c=kernel_c,
+                        kernel_cutoff=kernel_cutoff,
+                        omega=omega_real,
+                        t_cut=kbe_dab_t_cut,
+                        edge_skip=kbe_dab_edge_skip,
+                        return_details=False,
+                    )
+                    last_dab_diag_sqrt = float(dab_diag ** kbe_dab_power)
+                    last_dab_off_sqrt = float(dab_off ** kbe_dab_power)
+                    last_dab = max(dab_diag, dab_off)
+                    last_dab_sqrt_max = max(last_dab_diag_sqrt, last_dab_off_sqrt)
 
             if it % verbose_every == 0 or delta_ok:
                 msg = (
@@ -678,7 +734,13 @@ def solve_equilibrium_greater_real_time(
                     f"{sum_A:10.6f}  {np.nanmin(A_raw):11.3e}  {np.nanmax(A):11.3e}"
                 )
                 if last_dab is not None and need_dab:
-                    msg += f"  KBE d_ab^{kbe_dab_power:g}={last_dab_sqrt_max:.3e}"
+                    if mu == 0.0:
+                        msg += f"  KBE d_ab^{kbe_dab_power:g}={last_dab_sqrt_max:.3e}"
+                    else:
+                        msg += (
+                            f"  KBE d_ab_diag^{kbe_dab_power:g}={last_dab_diag_sqrt:.3e}"
+                            f"  d_ab_off^{kbe_dab_power:g}={last_dab_off_sqrt:.3e}"
+                        )
                 if require_dab_convergence:
                     msg += f"  require_dab={require_dab_convergence}"
                 print(msg)
@@ -727,15 +789,33 @@ def solve_equilibrium_greater_real_time(
         F_t   = omega_to_time(F_w, omega_real, t_grid)
         Ggt_t = -1j * F_t
 
+        # Off-diagonal companion (mu=0 -> identically zero): pure post-processing,
+        # built from the last self-consistent a_w computed in the loop above --
+        # it never feeds back into Sigma_R, so there's nothing to re-iterate.
+        GRoff_w = -1j * mu / (a_w**2 - mu**2)
+        A_off = 2.0 * np.real(GRoff_w)
+        Ggt_off_w = (1.0 - nF) * A_off
+        Ggt_off_t = omega_to_time(Ggt_off_w, omega_real, t_grid)
+
         print("\nFinal checks:")
         print("  F(0) = iG>(0) =", F_t[i0])
         print("  should be approx +0.5")
         print("  spectral sum =", _trapz(A, omega_real) / (2 * np.pi))
         print("  A evenness max |A(w)-A(-w)| =", np.max(np.abs(A - A[::-1])))
         print("  max |G>| =", np.max(np.abs(Ggt_t)))
-        print(f"  converged = {converged}, final dab^{kbe_dab_power:g} = {last_dab_sqrt_max:.3e}")
+        if mu != 0.0:
+            print("  max |Goff^>| =", np.max(np.abs(Ggt_off_t)))
+            print(
+                f"  converged = {converged}, final dab_diag^{kbe_dab_power:g} = "
+                f"{last_dab_diag_sqrt:.3e}, dab_off^{kbe_dab_power:g} = {last_dab_off_sqrt:.3e}"
+            )
+        else:
+            print(f"  converged = {converged}, final dab^{kbe_dab_power:g} = {last_dab_sqrt_max:.3e}")
 
-        return omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, last_dab_sqrt_max
+        return (
+            omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, last_dab_sqrt_max,
+            A_off, Ggt_off_t, GRoff_w,
+        )
 
 
 # ============================================================
@@ -751,6 +831,33 @@ def greater_from_spectral(omega: np.ndarray, A: np.ndarray, beta: float, t_eval:
     Ggt_omega = -1j * (1.0 - nF) * A
     Gt = np.array([
         np.sum(Ggt_omega * np.exp(-1j * omega * t)) * dw / (2 * np.pi)
+        for t in t_eval
+    ], dtype=complex)
+    return Gt
+
+
+def greater_off_from_spectral(
+    omega: np.ndarray, A_off: np.ndarray, beta: float, t_eval: np.ndarray
+) -> np.ndarray:
+    """Build equilibrium Goff^>(t) from the off-diagonal spectral function A_off(omega).
+
+    Off-diagonal analogue of `greater_from_spectral`. Unlike the diagonal
+    channel, there is NO extra -i prefactor here: Goff^>(w) = 2*(1-nF(w)) *
+    Re[Goff^R(w)] directly (Goff pairs two *different* Majoranas, psi_{2k-1}
+    and psi_{2k}, so the standard "A = -2*Im(G^R), G^> = -i*(1-nF)*A" FDT
+    shortcut -- valid only for a Hermitian-operator-with-itself correlator --
+    does not apply; see the derivation in syk_massdef_realtime.py's
+    docstring, cross-checked there against the exact free two-level
+    solution). Correspondingly `A_off` here is expected to already be the
+    off-diagonal spectral function 2*Re[Goff^R(w)] itself, not -2*Im(...).
+    """
+    omega = np.asarray(omega)
+    A_off = np.asarray(A_off)
+    dw = omega[1] - omega[0]
+    nF = 1.0 / (np.exp(np.clip(beta * omega, -500, 500)) + 1.0)
+    Goff_omega = (1.0 - nF) * A_off
+    Gt = np.array([
+        np.sum(Goff_omega * np.exp(-1j * omega * t)) * dw / (2 * np.pi)
         for t in t_eval
     ], dtype=complex)
     return Gt
@@ -834,6 +941,112 @@ def _init_G(Nt: int, n0: int, G_eq, t: np.ndarray) -> np.ndarray:
             G[i, j] = value
             G[j, i] = -np.conj(value)
     return G
+
+
+# ============================================================
+# Mass-deformed KBE: H_M = i*mu * sum_k s_k psi_{2k-1}psi_{2k} (Nosaka-Numasawa,
+# JHEP08(2020)081 [arXiv:1912.12302]) coupled into the real-time evolution.
+#
+# H_M is a deterministic bilinear (not part of the disorder average), so
+# Sigma^>/Sigma_R/Sigma_A stay built from the diagonal G alone exactly as in
+# rhs_t1/rhs_t2 above -- the only new content is a pair of Heisenberg-EOM
+# precession terms and a new off-diagonal correlator
+#     Goff^>(t1,t2) = -i<psi_{2k}(t1) psi_{2k-1}(t2)>
+# (independent of k, s_k=+1 WLOG), obeying, from d(psi_{2k-1})/dt =
+# i[H_SYK,psi_{2k-1}] + mu(t)*psi_{2k} and d(psi_{2k})/dt =
+# i[H_SYK,psi_{2k}] - mu(t)*psi_{2k-1}:
+#
+#     d/dt1 G(t1,t2)    = [SYK part, = rhs_t1]     + mu(t1)*Goff(t1,t2)
+#     d/dt2 G(t1,t2)    = [SYK part, = rhs_t2]     - mu(t2)*conj(Goff(t2,t1))
+#     d/dt1 Goff(t1,t2) = [SYK part, Sigma*Goff]   - mu(t1)*G(t1,t2)
+#     d/dt2 Goff(t1,t2) = [SYK part, Goff*Sigma]   + mu(t2)*G(t1,t2)
+#
+# The diagonal G(t,t)=-i/2 is still fixed by {psi,psi}=1 (mu doesn't change
+# the anticommutator). Goff(t,t) is NOT fixed -- it's a genuine observable,
+# related to the equal-time spin expectation value by <S_k(t)> = -2*Goff(t,t)
+# (verified against the exact free/J4=0 two-level solution and against the
+# real-time equilibrium solver's thermal <S_k>=tanh(mu*beta/2) in
+# syk_massdef_realtime_test.py-style checks).
+#
+# Unlike the diagonal G, there is no simple self-antisymmetry relating
+# Goff(t2,t1) to Goff(t1,t2) (that relation instead involves the *other*
+# off-diagonal correlator G_{psi_{2k-1},psi_{2k}}, which is not tracked
+# separately: G_{ab}(t2,t1) = -conj(Goff(t1,t2)), used above and below), so
+# `enforce_majorana_slice`-style row/column re-symmetrization does not apply
+# to Goff -- its row and column are independently evolved, and its diagonal
+# element is advanced via the total-time-derivative trick (sum of the d/dt1
+# and d/dt2 equations evaluated on the diagonal) since nothing else pins it.
+# ============================================================
+
+def dG_dt1_massdef(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, mu_of_t: np.ndarray,
+    i: int, j: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> complex:
+    return rhs_t1(G, S, i, j, dt, K_R_mat) + mu_of_t[i] * Goff[i, j]
+
+
+def dG_dt2_massdef(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, mu_of_t: np.ndarray,
+    i: int, j: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> complex:
+    return rhs_t2(G, S, i, j, dt, K_R_mat) - mu_of_t[j] * np.conj(Goff[j, i])
+
+
+def dGoff_dt1_massdef(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, mu_of_t: np.ndarray,
+    i: int, j: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> complex:
+    """d_{t1} Goff^>(t1,t2): same Sigma_R/Sigma_A (from the diagonal G) as
+    rhs_t1, but propagating Goff instead of G, plus the -mu(t1)*G(t1,t2)
+    precession term. The "advanced" combination for the (psi_{2k},psi_{2k-1})
+    pair, Goff_A(t_k,t_j) = conj(Goff[k,j]) - Goff[k,j], replaces rhs_t1's
+    G_A = -(G[k,j]+G[j,k]) (which used the diagonal self-antisymmetry that
+    isn't available here)."""
+    k = np.arange(i + 1)
+    w = trap_weights(len(k), dt)
+    Sigma_R = S[i, k] + S[k, i]
+    if K_R_mat is not None:
+        Sigma_R = Sigma_R - K_R_mat[i, k]
+    I1 = np.sum(w * Sigma_R * Goff[k, j])
+
+    k = np.arange(j + 1)
+    w = trap_weights(len(k), dt)
+    Goff_A = np.conj(Goff[k, j]) - Goff[k, j]
+    I2 = np.sum(w * S[i, k] * Goff_A)
+    return -1j * (I1 + I2) - mu_of_t[i] * G[i, j]
+
+
+def dGoff_dt2_massdef(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, mu_of_t: np.ndarray,
+    i: int, j: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> complex:
+    """d_{t2} Goff^>(t1,t2): mirrors rhs_t2 with Goff_R(t_i,t_k) = Goff[i,k] -
+    conj(Goff[i,k]) replacing rhs_t2's G_R = G[i,k]+G[k,i], plus the
+    +mu(t2)*G(t1,t2) precession term."""
+    k = np.arange(i + 1)
+    w = trap_weights(len(k), dt)
+    Goff_R = Goff[i, k] - np.conj(Goff[i, k])
+    I1 = np.sum(w * Goff_R * S[k, j])
+
+    k = np.arange(j + 1)
+    w = trap_weights(len(k), dt)
+    Sigma_A = -(S[k, j] + S[j, k])
+    if K_R_mat is not None:
+        Sigma_A = Sigma_A - np.conj(K_R_mat[j, k])
+    I2 = np.sum(w * Goff[i, k] * Sigma_A)
+    return +1j * (I1 + I2) + mu_of_t[j] * G[i, j]
+
+
+def _init_Goff(Nt: int, n0: int, Goff_eq, t: np.ndarray) -> np.ndarray:
+    """Initialise the pre-quench Goff block. Unlike _init_G, no symmetry
+    shortcut is available (Goff has no self-antisymmetry), and Goff(t,t) is
+    a genuine nonzero equilibrium value, not a fixed constant, so every
+    entry is evaluated directly."""
+    Goff = np.zeros((Nt, Nt), dtype=complex)
+    for i in range(n0 + 1):
+        for j in range(n0 + 1):
+            Goff[i, j] = Goff_eq(t[i] - t[j])
+    return Goff
 
 
 def evolve_syk4_kbe(
@@ -1026,6 +1239,243 @@ def evolve_syk4_kbe(
 
 
 # ============================================================
+# Mass-deformed single SYK4 KBE quench: J4_i -> J4_f, mu_i -> mu_f
+#
+# Same predictor-corrector square-grid scheme as evolve_syk4_kbe, generalized
+# to the coupled (G, Goff) pair from the H_M = i*mu*sum_k s_k psi_{2k-1}psi_{2k}
+# deformation (see the dG_dt.../dGoff_dt... helpers and their docstrings just
+# above evolve_syk4_kbe). Wired into run_kbe_one/kbe-one: mu_i/mu_f nonzero
+# dispatches here instead of to evolve_syk4_kbe.
+# ============================================================
+
+def evolve_syk4_kbe_massdef(
+    omega: np.ndarray,
+    A: np.ndarray,
+    A_off: np.ndarray,
+    beta_i: float,
+    mu_i: float,
+    mu_f: float,
+    J2_i: float,
+    J2_f: float,
+    J4_i: float,
+    J4_f: float,
+    t_pre: float,
+    t_post: float,
+    dt: float = 0.05,
+    n_corr: int = 4,
+    corr_tol: float = 1e-10,
+    progress_every: int = 200,
+    return_diagnostics: bool = False,
+    kernel_lambda: float = 0.0,
+    kernel_c: float = 0.0,
+    kernel_cutoff: Optional[float] = None,
+    checkpoint_path: Optional[Path] = None,  # path for .ckpt.npz; None = no checkpointing
+    checkpoint_every: int = 200,              # time steps between checkpoint saves
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray] | Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+    """Mass-deformed analogue of evolve_syk4_kbe. `A`/`A_off` are the
+    diagonal/off-diagonal equilibrium spectral functions from
+    solve_equilibrium_greater_real_time (A_off is all zeros at mu=0).
+
+    Checkpointing mirrors evolve_syk4_kbe exactly, just saving both G and
+    Goff (plus their diagnostics) instead of G alone.
+
+    Returns (t, G, Goff) or (t, G, Goff, diagnostics).
+    """
+    if kernel_lambda != 0.0 and J4_i != J4_f:
+        print(
+            "WARNING: kernel_lambda != 0 with J4_i != J4_f. The tuned kernel "
+            "is static (not quenched) -- see evolve_syk4_kbe's warning for the "
+            "same combination; make sure that's really what you want."
+        )
+    K_R_w, kernel_cutoff = build_kernel_R_w(
+        omega, J4_i, kernel_lambda, kernel_c, kernel_cutoff
+    )
+
+    t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
+    n0 = int(np.argmin(np.abs(t)))
+    t[n0] = 0.0
+    Nt = len(t)
+
+    K_R_mat = build_kernel_R_mat(t, omega, K_R_w)
+
+    t_rel_max = t_pre + t_post
+    t_grid = np.linspace(-t_rel_max, t_rel_max, 4 * Nt + 1)
+    G_eq_t = greater_from_spectral(omega, A, beta_i, t_grid)
+    G_eq = interp1d(t_grid, G_eq_t, kind="cubic", fill_value="extrapolate")
+    Goff_eq_t = greater_off_from_spectral(omega, A_off, beta_i, t_grid)
+    Goff_eq = interp1d(t_grid, Goff_eq_t, kind="cubic", fill_value="extrapolate")
+
+    corr_final_err = np.full(Nt, np.nan, dtype=float)
+    corr_iters_used = np.zeros(Nt, dtype=int)
+
+    # ── Resume from checkpoint or initialise fresh ───────────────────────────
+    n_start = n0 + 1
+    if checkpoint_path is not None and Path(checkpoint_path).exists():
+        try:
+            with np.load(checkpoint_path, allow_pickle=False) as ckpt:
+                G = np.array(ckpt["G"], dtype=complex, copy=True)
+                Goff = np.array(ckpt["Goff"], dtype=complex, copy=True)
+                n_start = int(np.asarray(ckpt["n_done"]).item()) + 1
+                corr_final_err[:n_start] = ckpt["corr_final_err"][:n_start]
+                corr_iters_used[:n_start] = ckpt["corr_iters_used"][:n_start]
+            print(f"Resumed mass-deformed KBE from checkpoint at n={n_start - 1} / {Nt - 1}"
+                  f"  (t={t[n_start - 1]:.3f})")
+        except Exception as e:
+            print(f"Warning: could not load KBE checkpoint ({e}), starting fresh.")
+            n_start = n0 + 1
+            G = _init_G(Nt, n0, G_eq, t)
+            Goff = _init_Goff(Nt, n0, Goff_eq, t)
+    else:
+        G = _init_G(Nt, n0, G_eq, t)
+        Goff = _init_Goff(Nt, n0, Goff_eq, t)
+
+    J2_of_t = np.where(t < 0.0, J2_i, J2_f)
+    J4_of_t = np.where(t < 0.0, J4_i, J4_f)
+    mu_of_t = np.where(t < 0.0, mu_i, mu_f)
+    JJ2 = np.outer(J2_of_t, J2_of_t)
+    JJ4 = np.outer(J4_of_t, J4_of_t)
+
+    checkpoint_state: Dict[str, Any] = {"n_done": n_start - 1}
+
+    def _save_checkpoint(n_done: int) -> None:
+        if checkpoint_path is None:
+            return
+        atomic_savez_compressed(
+            checkpoint_path,
+            G=G,
+            Goff=Goff,
+            n_done=np.array(n_done),
+            n0=np.array(n0),
+            corr_final_err=corr_final_err,
+            corr_iters_used=corr_iters_used,
+        )
+
+    def _checkpoint_then_exit(signum: int, _frame: Any) -> None:
+        signal_name = signal.Signals(signum).name
+        n_done = checkpoint_state["n_done"]
+        if checkpoint_path is not None and n_done >= n0:
+            _save_checkpoint(n_done)
+            print(
+                f"\n[{signal_name}] Mass-deformed KBE checkpoint saved at n={n_done}, "
+                f"t={t[n_done]:.3f}; exiting for requeue.",
+                flush=True,
+            )
+        else:
+            print(
+                f"\n[{signal_name}] No completed KBE step beyond the "
+                "equilibrium point to checkpoint; exiting.",
+                flush=True,
+            )
+        raise SystemExit(128 + signum)
+
+    with temporary_signal_handlers({
+        signal.SIGUSR1: _checkpoint_then_exit,
+        signal.SIGTERM: _checkpoint_then_exit,
+    }):
+        for n in range(n_start, Nt):
+            S = sigma_greater_syk4(G, JJ2, JJ4)
+            d1_old = np.array(
+                [dG_dt1_massdef(G, Goff, S, mu_of_t, n - 1, j, dt, K_R_mat) for j in range(n)],
+                dtype=complex,
+            )
+            d2_old = np.array(
+                [dG_dt2_massdef(G, Goff, S, mu_of_t, i, n - 1, dt, K_R_mat) for i in range(n)],
+                dtype=complex,
+            )
+            doff1_old = np.array(
+                [dGoff_dt1_massdef(G, Goff, S, mu_of_t, n - 1, j, dt, K_R_mat) for j in range(n)],
+                dtype=complex,
+            )
+            doff2_old = np.array(
+                [dGoff_dt2_massdef(G, Goff, S, mu_of_t, i, n - 1, dt, K_R_mat) for i in range(n)],
+                dtype=complex,
+            )
+
+            G[n, :n] = G[n - 1, :n] + dt * d1_old
+            G[:n, n] = G[:n, n - 1] + dt * d2_old
+            G[n, n] = -0.5j
+            enforce_majorana_slice(G, n)
+
+            Goff[n, :n] = Goff[n - 1, :n] + dt * doff1_old
+            Goff[:n, n] = Goff[:n, n - 1] + dt * doff2_old
+            # Goff(t,t) is not fixed by any anticommutator; advance it via the total
+            # time derivative d/dt Goff(t,t) = d_t1 Goff + d_t2 Goff on the diagonal.
+            # doff1_old[-1]/doff2_old[-1] are exactly those two pieces at (n-1,n-1).
+            Goff[n, n] = Goff[n - 1, n - 1] + dt * (doff1_old[-1] + doff2_old[-1])
+
+            err = np.inf
+            it_used = 0
+            for it in range(n_corr):
+                row_old = G[n, :n].copy()
+                col_old = G[:n, n].copy()
+                rowoff_old = Goff[n, :n].copy()
+                coloff_old = Goff[:n, n].copy()
+
+                S = sigma_greater_syk4(G, JJ2, JJ4)
+                d1_new = np.array(
+                    [dG_dt1_massdef(G, Goff, S, mu_of_t, n, j, dt, K_R_mat) for j in range(n)],
+                    dtype=complex,
+                )
+                d2_new = np.array(
+                    [dG_dt2_massdef(G, Goff, S, mu_of_t, i, n, dt, K_R_mat) for i in range(n)],
+                    dtype=complex,
+                )
+                doff1_new = np.array(
+                    [dGoff_dt1_massdef(G, Goff, S, mu_of_t, n, j, dt, K_R_mat) for j in range(n)],
+                    dtype=complex,
+                )
+                doff2_new = np.array(
+                    [dGoff_dt2_massdef(G, Goff, S, mu_of_t, i, n, dt, K_R_mat) for i in range(n)],
+                    dtype=complex,
+                )
+
+                G[n, :n] = G[n - 1, :n] + 0.5 * dt * (d1_old + d1_new)
+                G[:n, n] = G[:n, n - 1] + 0.5 * dt * (d2_old + d2_new)
+                G[n, n] = -0.5j
+                enforce_majorana_slice(G, n)
+
+                Goff[n, :n] = Goff[n - 1, :n] + 0.5 * dt * (doff1_old + doff1_new)
+                Goff[:n, n] = Goff[:n, n - 1] + 0.5 * dt * (doff2_old + doff2_new)
+                Goff[n, n] = Goff[n - 1, n - 1] + 0.5 * dt * (
+                    doff1_old[-1] + doff2_old[-1] + doff1_new[-1] + doff2_new[-1]
+                )
+
+                err = max(
+                    float(np.max(np.abs(G[n, :n] - row_old))),
+                    float(np.max(np.abs(G[:n, n] - col_old))),
+                    float(np.max(np.abs(Goff[n, :n] - rowoff_old))),
+                    float(np.max(np.abs(Goff[:n, n] - coloff_old))),
+                )
+                it_used = it + 1
+                if err < corr_tol:
+                    break
+
+            corr_final_err[n] = err
+            corr_iters_used[n] = it_used
+            checkpoint_state["n_done"] = n
+
+            if progress_every and (n - n0) % progress_every == 0:
+                print(f"evolved to t = {t[n]:.3f}, corr err = {err:.3e}, iters = {it_used}")
+
+            if checkpoint_path is not None and (n - n0) % checkpoint_every == 0:
+                _save_checkpoint(n)
+                print(f"  [KBE checkpoint saved at n={n}, t={t[n]:.3f}]")
+
+        if checkpoint_path is not None and Path(checkpoint_path).exists():
+            Path(checkpoint_path).unlink()
+            print("KBE checkpoint removed (run complete).")
+
+        if return_diagnostics:
+            diagnostics = {
+                "corr_final_err": corr_final_err,
+                "corr_iters_used": corr_iters_used,
+                "n0": np.array(n0),
+            }
+            return t, G, Goff, diagnostics
+        return t, G, Goff
+
+
+# ============================================================
 # Equilibrium-KBE self-consistency residual (scalar, single Majorana)
 # ============================================================
 
@@ -1177,6 +1627,118 @@ def calc_kbe_d_ab_syk_equilibrium(
     }
 
 
+def calc_kbe_d_ab_syk_equilibrium_massdef(
+    t: np.ndarray,
+    Ggt: np.ndarray,
+    Goff_t: np.ndarray,
+    mu: float,
+    J2: float,
+    J4: float,
+    *,
+    kernel_lambda: float = 0.0,
+    kernel_c: float = 0.0,
+    kernel_cutoff: Optional[float] = None,
+    omega: Optional[np.ndarray] = None,
+    t_cut: Optional[float] = None,
+    edge_skip: int = 4,
+    return_details: bool = False,
+) -> Tuple[float, float] | Dict[str, Any]:
+    """Mass-deformed analogue of calc_kbe_d_ab_syk_equilibrium: checks BOTH
+    coupled equilibrium KBE equations (see dG_dt.../dGoff_dt... docstrings
+    above evolve_syk4_kbe for the derivation of the mass-term pieces used
+    here), returning (d_ab_diag, d_ab_off) as separate residuals -- the
+    caller decides how to combine them (solve_equilibrium_greater_real_time
+    requires *both* below dab_tol before marking mu != 0 converged).
+
+    Sigma is still built only from the diagonal Ggt (H_M is a deterministic
+    bilinear, never part of the disorder average), so Sigma_R/Sigma_A/Sgt
+    are identical to the mu=0 function. What's new is:
+      - Goff^<(tau) = conj(Goff^>(tau)) (a general KMS/Hermiticity identity
+        for this operator pairing, verified against the exact free
+        two-level solution), giving Goff_R(tau) = theta(tau)*2i*Im(Goff),
+        Goff_A(tau) = -theta(-tau)*2i*Im(Goff).
+      - The two G-equations pick up +i*mu*Goff(tau) (t1) and
+        +i*mu*conj(Goff(-tau)) (t2) respectively (NOT the same object --
+        Goff(t1,t2) has no simple parity under t1<->t2, unlike G).
+      - The two Goff-equations both pick up -i*mu*Ggt(tau) (same object for
+        both, since this piece traces back to the *diagonal* G at equal
+        position, which has no such ambiguity).
+    Validated against the exact free (J4=0) two-level solution (residual
+    ~1e-9, vs. ~0.03 for deliberately wrong Goff or wrong mu -- see
+    syk_massdef_benchmark.py-style checks) and cross-checked to be small
+    (~1e-11, matching the diagonal-only channel's own residual scale) for a
+    converged interacting (J4>0) equilibrium solution.
+    """
+    t = np.asarray(t)
+    Ggt = np.asarray(Ggt, dtype=complex)
+    Goff_t = np.asarray(Goff_t, dtype=complex)
+    mu = float(mu)
+
+    theta_p, theta_m = _theta_plus_minus(t)
+
+    Glt = -Ggt[::-1]
+    GR = theta_p * (Ggt - Glt)
+    GA = theta_m * (Glt - Ggt)
+
+    Sgt = J2**2 * Ggt - J4**2 * Ggt**3
+    Slt = -Sgt[::-1]
+    SR = theta_p * (Sgt - Slt)
+    SA = theta_m * (Slt - Sgt)
+
+    if kernel_lambda != 0.0:
+        if omega is None:
+            raise ValueError(
+                "omega is required to build the tuned kernel when kernel_lambda != 0."
+            )
+        K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff)
+        K_R_t = _build_kernel_R_t(t, omega, K_R_w)
+        K_A_t = np.conj(K_R_t[::-1])
+        SR = SR - K_R_t
+        SA = SA - K_A_t
+
+    Goff_lt = np.conj(Goff_t)
+    GoffR = theta_p * (Goff_t - Goff_lt)
+    GoffA = theta_m * (Goff_lt - Goff_t)
+
+    dG = _central_derivative_1d(Ggt, t)
+    dGoff = _central_derivative_1d(Goff_t, t)
+
+    conv_t1_G = _conv_1d_same(SR, Ggt, t) + _conv_1d_same(Sgt, GA, t)
+    conv_t2_G = _conv_1d_same(GR, Sgt, t) + _conv_1d_same(Ggt, SA, t)
+    conv_t1_off = _conv_1d_same(SR, Goff_t, t) + _conv_1d_same(Sgt, GoffA, t)
+    conv_t2_off = _conv_1d_same(GoffR, Sgt, t) + _conv_1d_same(Goff_t, SA, t)
+
+    res_t1_G = 1j * dG - conv_t1_G - 1j * mu * Goff_t
+    res_t2_G = 1j * dG - conv_t2_G - 1j * mu * np.conj(Goff_t[::-1])
+    res_t1_off = 1j * dGoff - conv_t1_off + 1j * mu * Ggt
+    res_t2_off = 1j * dGoff - conv_t2_off + 1j * mu * Ggt
+
+    mask = np.ones(len(t), dtype=bool)
+    if edge_skip is not None and edge_skip > 0:
+        mask[:edge_skip] = False
+        mask[-edge_skip:] = False
+    if t_cut is not None:
+        mask &= np.abs(t) <= t_cut
+
+    d_t1G = float(np.mean(np.abs(res_t1_G[mask]) ** 2))
+    d_t2G = float(np.mean(np.abs(res_t2_G[mask]) ** 2))
+    d_t1off = float(np.mean(np.abs(res_t1_off[mask]) ** 2))
+    d_t2off = float(np.mean(np.abs(res_t2_off[mask]) ** 2))
+    d_ab_diag = 0.5 * (d_t1G + d_t2G)
+    d_ab_off = 0.5 * (d_t1off + d_t2off)
+
+    if not return_details:
+        return d_ab_diag, d_ab_off
+
+    return {
+        "d_ab_diag": d_ab_diag, "d_ab_off": d_ab_off,
+        "d_t1G": d_t1G, "d_t2G": d_t2G, "d_t1off": d_t1off, "d_t2off": d_t2off,
+        "res_t1_G": res_t1_G, "res_t2_G": res_t2_G,
+        "res_t1_off": res_t1_off, "res_t2_off": res_t2_off,
+        "mask": mask,
+    }
+
+
 # ============================================================
 # File naming and run wrappers
 # ============================================================
@@ -1186,6 +1748,7 @@ def equilibrium_filename(out_dir: os.PathLike | str, meta: Dict[str, Any]) -> Pa
     h = param_hash(meta)
     return out_dir / (
         f"syk_eq_J2_{sf(meta['J2'])}_J4_{sf(meta['J4'])}_beta_{sf(meta['beta'])}"
+        f"_mu_{sf(meta.get('mu', 0.0))}"
         f"_klam_{sf(meta.get('kernel_lambda', 0.0))}"
         f"_kc_{sf(meta.get('kernel_c', 0.0))}"
         f"_kcut_{sf(meta.get('kernel_cutoff', 0.0))}"
@@ -1200,6 +1763,7 @@ def kbe_filename(out_dir: os.PathLike | str, meta: Dict[str, Any]) -> Path:
     return out_dir / (
         f"syk_kbe_J2_{sf(meta['J2_i'])}_to_{sf(meta['J2_f'])}"
         f"_J4_{sf(meta['J4_i'])}_to_{sf(meta['J4_f'])}"
+        f"_mu_{sf(meta.get('mu_i', 0.0))}_to_{sf(meta.get('mu_f', 0.0))}"
         f"_beta_{sf(meta['beta'])}_dt_{sf(meta['dt'])}"
         f"_tpre_{sf(meta['t_pre'])}_tpost_{sf(meta['t_post'])}"
         f"_ncorr_{int(meta['n_corr'])}_ctol_{sf(meta['corr_tol'])}_{h}.npz"
@@ -1211,6 +1775,7 @@ def run_equilibrium_one(
     beta: float,
     *,
     J2: float = 0.0,
+    mu: float = 0.0,
     out_dir: os.PathLike | str = "eq_runs",
     dt: float = 0.05,
     omega_max: float = 8.0,
@@ -1254,6 +1819,7 @@ def run_equilibrium_one(
         "J2": float(J2),
         "J4": float(J4),
         "beta": float(beta),
+        "mu": float(mu),
         "dt": float(dt),
         "omega_max": float(omega_max),
         "Nw": int(Nw),
@@ -1286,10 +1852,14 @@ def run_equilibrium_one(
     print("============================================================")
 
     try:
-        omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, final_dab_sqrt_max = solve_equilibrium_greater_real_time(
+        (
+            omega_real, A, t_grid, F_t, Ggt_t, GR_w, K_R_w, converged, final_dab_sqrt_max,
+            A_off, Ggt_off_t, GRoff_w,
+        ) = solve_equilibrium_greater_real_time(
             J2=J2,
             J4=J4,
             beta=beta,
+            mu=mu,
             omega_max=omega_max,
             Nw=Nw,
             t_max=t_max,
@@ -1321,6 +1891,10 @@ def run_equilibrium_one(
             Ggt_t=Ggt_t,
             GR_w=GR_w,
             K_R_w=K_R_w,
+            mu=np.array(float(mu)),
+            A_off=A_off,
+            Ggt_off_t=Ggt_off_t,
+            GRoff_w=GRoff_w,
             metadata_json=json.dumps(meta),
         )
         row = dict(meta)
@@ -1350,6 +1924,7 @@ def find_eq_file(
     beta: float,
     *,
     J2: float = 0.0,
+    mu: float = 0.0,
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
@@ -1375,6 +1950,14 @@ def find_eq_file(
         & np.isclose(eq_manifest["J4"].astype(float), float(J4))
         & np.isclose(eq_manifest["beta"].astype(float), float(beta))
     ].copy()
+
+    # Legacy rows without a "mu" column predate the mass deformation and are
+    # implicitly mu=0, same convention as kernel_lambda below.
+    requested_mu = float(mu)
+    if "mu" in good.columns:
+        good = good[np.isclose(good["mu"].fillna(0.0).astype(float), requested_mu)]
+    elif not np.isclose(requested_mu, 0.0):
+        good = good.iloc[0:0]
 
     # Exclude old rows that were labelled ok despite explicitly recording
     # converged=False. Missing convergence metadata remains legacy-compatible.
@@ -1413,7 +1996,7 @@ def find_eq_file(
     if len(good) == 0:
         raise FileNotFoundError(
             f"No converged equilibrium file found for J2={J2}, J4={J4}, "
-            f"beta={beta}, kernel_lambda={kernel_lambda}, "
+            f"beta={beta}, mu={mu}, kernel_lambda={kernel_lambda}, "
             f"kernel_c={kernel_c}, kernel_cutoff={kernel_cutoff}"
         )
 
@@ -1438,6 +2021,7 @@ def run_kbe_one(
     *,
     J2_i: float = 0.0,
     J2_f: float = 0.0,
+    mu_f: float = 0.0,
     dt: float = 0.05,
     t_pre: Optional[float] = None,
     t_post: Optional[float] = None,
@@ -1454,6 +2038,10 @@ def run_kbe_one(
     eq_kernel_lambda: float = 0.0,
     eq_kernel_c: float = 0.0,
     eq_kernel_cutoff: Optional[float] = None,
+    # mu used to select the initial equilibrium state (the actual mu_i fed
+    # into the evolution is read back from that file's own metadata, not
+    # re-derived from this -- see the "mu_i" comment below).
+    eq_mu: float = 0.0,
     eq_dir: os.PathLike | str = "eq_runs",
     out_dir: os.PathLike | str = "kbe_runs",
     eq_file: Optional[os.PathLike | str] = None,
@@ -1484,6 +2072,7 @@ def run_kbe_one(
             J2=J2_i,
             J4=J4_i,
             beta=beta,
+            mu=eq_mu,
             kernel_lambda=eq_kernel_lambda,
             kernel_c=eq_kernel_c,
             kernel_cutoff=eq_kernel_cutoff,
@@ -1496,14 +2085,63 @@ def run_kbe_one(
     if kernel_cutoff is None:
         kernel_cutoff = 0.5 * max(J_kernel, 1.0)
 
+    try:
+        with np.load(eq_file, allow_pickle=False) as eq_data:
+            omega_real = np.array(eq_data["omega_real"], copy=True)
+            A = np.array(eq_data["A"], copy=True)
+
+            # mu_i is authoritative from the equilibrium file itself (like
+            # J4_i is implicitly trusted to match what the file was solved
+            # at) -- not re-derived from eq_mu, so a selection mismatch can
+            # never silently feed the wrong mu into the evolution.
+            mu_i = float(np.asarray(eq_data["mu"]).item()) if "mu" in eq_data.files else 0.0
+            if "A_off" in eq_data.files:
+                A_off = np.array(eq_data["A_off"], copy=True)
+            elif mu_i == 0.0:
+                A_off = np.zeros_like(A)
+            else:
+                raise ValueError(
+                    f"Equilibrium file {eq_file} has mu={mu_i} but no saved A_off "
+                    "(it predates the mass-deformation support); re-run eq-one."
+                )
+
+            if "t_grid" in eq_data.files and "Ggt_t" in eq_data.files:
+                t_eq = np.array(eq_data["t_grid"], copy=True)
+                Ggt_eq_t = np.array(eq_data["Ggt_t"], copy=True)
+            elif "tau_grid" in eq_data.files and "Ggt_tau" in eq_data.files:
+                t_eq = np.array(eq_data["tau_grid"], copy=True)
+                Ggt_eq_t = np.array(eq_data["Ggt_tau"], copy=True)
+            else:
+                t_eq = np.arange(
+                    -(t_pre + t_post),
+                    (t_pre + t_post) + 0.5 * dt,
+                    dt,
+                )
+                Ggt_eq_t = greater_from_spectral(
+                    omega_real, A, beta, t_eq
+                )
+    except Exception as e:
+        # Loading the eq file failed before meta/filename even exist yet;
+        # nothing to write to the manifest for a run that never got a name.
+        traceback.print_exc()
+        raise
+
+    massdef = (mu_i != 0.0) or (mu_f != 0.0)
+
     # Record the requested preparation kernel separately from the static
     # evolution kernel. For lambda=0, c/cutoff are inactive selection fields.
+    # Same pattern for mu: mu_i (read from the eq file above) is what's
+    # actually present for t<0; mu_f is the quench target (mu_i=mu_f=0 skips
+    # the mass-deformed evolver entirely, identical to before this feature).
     meta = {
         "kind": "kbe",
         "J2_i": float(J2_i),
         "J2_f": float(J2_f),
         "J4_i": float(J4_i),
         "J4_f": float(J4_f),
+        "mu_i": float(mu_i),
+        "mu_f": float(mu_f),
+        "eq_mu": float(eq_mu),
         "beta": float(beta),
         "dt": float(dt),
         "t_pre": float(t_pre),
@@ -1522,7 +2160,7 @@ def run_kbe_one(
         ),
         "eq_source": str(eq_file),
         "save_diagnostics": bool(save_diagnostics),
-        "save_format": "post_quench_rows_plus_eq_gf",
+        "save_format": "post_quench_rows_plus_eq_gf_massdef" if massdef else "post_quench_rows_plus_eq_gf",
         "full_Ggt_saved": False,
     }
     filename = kbe_filename(out_dir, meta)
@@ -1533,53 +2171,63 @@ def run_kbe_one(
     checkpoint_path = checkpoint_path_for(filename)
 
     print("\n============================================================")
-    print("Running KBE")
+    print("Running KBE" + (" (mass-deformed)" if massdef else ""))
     print(json.dumps(meta, indent=2))
     print("Saving to:", filename)
     print("============================================================")
 
     try:
-        with np.load(eq_file, allow_pickle=False) as eq_data:
-            omega_real = np.array(eq_data["omega_real"], copy=True)
-            A = np.array(eq_data["A"], copy=True)
+        if not massdef:
+            t_kbe, Ggt, diagnostics = evolve_syk4_kbe(
+                omega_real,
+                A,
+                beta,
+                J2_i=J2_i,
+                J2_f=J2_f,
+                J4_i=J4_i,
+                J4_f=J4_f,
+                t_pre=t_pre,
+                t_post=t_post,
+                dt=dt,
+                n_corr=n_corr,
+                corr_tol=corr_tol,
+                progress_every=checkpoint_every,
+                kernel_lambda=kernel_lambda,
+                kernel_c=kernel_c,
+                kernel_cutoff=kernel_cutoff,
+                return_diagnostics=True,
+                checkpoint_path=checkpoint_path,
+                checkpoint_every=checkpoint_every,
+            )
+            Goff = None
+            Goff_eq_t = None
+        else:
+            t_kbe, Ggt, Goff, diagnostics = evolve_syk4_kbe_massdef(
+                omega_real,
+                A,
+                A_off,
+                beta,
+                mu_i=mu_i,
+                mu_f=mu_f,
+                J2_i=J2_i,
+                J2_f=J2_f,
+                J4_i=J4_i,
+                J4_f=J4_f,
+                t_pre=t_pre,
+                t_post=t_post,
+                dt=dt,
+                n_corr=n_corr,
+                corr_tol=corr_tol,
+                progress_every=checkpoint_every,
+                kernel_lambda=kernel_lambda,
+                kernel_c=kernel_c,
+                kernel_cutoff=kernel_cutoff,
+                return_diagnostics=True,
+                checkpoint_path=checkpoint_path,
+                checkpoint_every=checkpoint_every,
+            )
+            Goff_eq_t = greater_off_from_spectral(omega_real, A_off, beta, t_eq)
 
-            if "t_grid" in eq_data.files and "Ggt_t" in eq_data.files:
-                t_eq = np.array(eq_data["t_grid"], copy=True)
-                Ggt_eq_t = np.array(eq_data["Ggt_t"], copy=True)
-            elif "tau_grid" in eq_data.files and "Ggt_tau" in eq_data.files:
-                t_eq = np.array(eq_data["tau_grid"], copy=True)
-                Ggt_eq_t = np.array(eq_data["Ggt_tau"], copy=True)
-            else:
-                t_eq = np.arange(
-                    -(t_pre + t_post),
-                    (t_pre + t_post) + 0.5 * dt,
-                    dt,
-                )
-                Ggt_eq_t = greater_from_spectral(
-                    omega_real, A, beta, t_eq
-                )
-
-        t_kbe, Ggt, diagnostics = evolve_syk4_kbe(
-            omega_real,
-            A,
-            beta,
-            J2_i=J2_i,
-            J2_f=J2_f,
-            J4_i=J4_i,
-            J4_f=J4_f,
-            t_pre=t_pre,
-            t_post=t_post,
-            dt=dt,
-            n_corr=n_corr,
-            corr_tol=corr_tol,
-            progress_every=checkpoint_every,
-            kernel_lambda=kernel_lambda,
-            kernel_c=kernel_c,
-            kernel_cutoff=kernel_cutoff,
-            return_diagnostics=True,
-            checkpoint_path=checkpoint_path,
-            checkpoint_every=checkpoint_every,
-        )
         n0 = int(np.asarray(diagnostics["n0"]).item())
         t_kbe[n0] = 0.0
 
@@ -1599,6 +2247,12 @@ def run_kbe_one(
             "n0": np.array(n0),
             "metadata_json": json.dumps(meta),
         }
+        if massdef:
+            payload.update(
+                Goff_post=Goff[n0:, :].copy(),
+                Goff_eq_t=Goff_eq_t,
+                A_off=A_off,
+            )
         if save_diagnostics:
             payload.update(
                 corr_final_err_post=diagnostics["corr_final_err"][n0:],
@@ -1754,6 +2408,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     peq.add_argument("--J4", type=float, required=True)
     peq.add_argument("--beta", type=float, required=True)
     peq.add_argument("--J2", type=float, default=0.0)
+    peq.add_argument("--mu", type=float, default=0.0, help="H_M = i*mu*sum_k s_k psi_{2k-1}psi_{2k} mass/spin deformation strength. 0 = off (default, identical to before this feature). With --require-dab-convergence, checks both the diagonal (G) and off-diagonal (Goff) KBE residuals.")
     peq.add_argument("--out-dir", default="eq_runs")
     peq.add_argument("--dt", type=float, default=0.05)
     peq.add_argument("--omega-max", type=float, default=8.0)
@@ -1778,6 +2433,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--beta", type=float, required=True)
     pkbe.add_argument("--J2-i", type=float, default=0.0)
     pkbe.add_argument("--J2-f", type=float, default=0.0)
+    pkbe.add_argument("--mu-f", type=float, default=0.0, help="Mass/spin deformation quench target. mu_i is NOT a separate flag -- it's read from the selected equilibrium file's own metadata (see --eq-mu), so it can never accidentally mismatch what the pre-quench state was actually prepared at. mu_i=mu_f=0 (default) is identical to before this feature (dispatches to the plain, single-G evolver).")
     pkbe.add_argument("--dt", type=float, default=0.05)
     pkbe.add_argument("--t-pre", type=float, default=None)
     pkbe.add_argument("--t-post", type=float, default=None)
@@ -1792,6 +2448,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--eq-kernel-lambda", type=float, default=0.0)
     pkbe.add_argument("--eq-kernel-c", type=float, default=0.0)
     pkbe.add_argument("--eq-kernel-cutoff", type=float, default=None)
+    pkbe.add_argument("--eq-mu", type=float, default=0.0, help="mu used to select which equilibrium file to quench from (matched against the eq manifest's mu column, same pattern as --eq-kernel-lambda).")
     pkbe.add_argument("--eq-dir", default="eq_runs")
     pkbe.add_argument("--out-dir", default="kbe_runs")
     pkbe.add_argument("--eq-file", default=None)
@@ -1813,6 +2470,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             J4=args.J4,
             beta=args.beta,
             J2=args.J2,
+            mu=args.mu,
             out_dir=args.out_dir,
             dt=args.dt,
             omega_max=args.omega_max,
@@ -1838,6 +2496,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             beta=args.beta,
             J2_i=args.J2_i,
             J2_f=args.J2_f,
+            mu_f=args.mu_f,
             dt=args.dt,
             t_pre=args.t_pre,
             t_post=args.t_post,
@@ -1852,6 +2511,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             eq_kernel_lambda=args.eq_kernel_lambda,
             eq_kernel_c=args.eq_kernel_c,
             eq_kernel_cutoff=args.eq_kernel_cutoff,
+            eq_mu=args.eq_mu,
             eq_dir=args.eq_dir,
             out_dir=args.out_dir,
             eq_file=args.eq_file,

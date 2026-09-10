@@ -39,7 +39,10 @@ J4S=(1)
 BETAS=(36 48 60 72)
 
 # Equilibrium solve
-EQ_TOL=1e-12             
+MU=0.0                   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now
+                          # checks BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals
+                          # when mu != 0 (see calc_kbe_d_ab_syk_equilibrium_massdef).
+EQ_TOL=1e-12
 DAB_TOL=1e-6             # not enforced if REQUIRE_DAB=0 below
 REQUIRE_DAB=0
 EQ_DT_FACTOR=0.0064         # eq dt = EQ_DT_FACTOR / J4
@@ -109,17 +112,18 @@ print(Nw)
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
-    LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_lam${EQ_KERNEL_LAMBDA}.log"
+    LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_mu${MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
     echo "============================================================"
     echo "Equilibrium solve (tuned kernel)"
-    echo "  J4=$J4 beta=$BETA dt=$EQ_DT omega_max=$OMEGA_MAX Nw=$NW"
+    echo "  J4=$J4 beta=$BETA mu=$MU dt=$EQ_DT omega_max=$OMEGA_MAX Nw=$NW"
     echo "  kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=$EQ_KERNEL_CUTOFF"
     echo "============================================================"
 
     "$PYTHON" -u syk_batch_tools.py eq-one \
         --J4            "$J4"            \
         --beta          "$BETA"          \
+        --mu            "$MU"            \
         --dt            "$EQ_DT"         \
         --omega-max     "$OMEGA_MAX"     \
         --Nw            "$NW"            \
