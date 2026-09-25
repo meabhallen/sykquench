@@ -1,12 +1,11 @@
 #!/bin/bash
-#SBATCH --account=ac_onsager
-#SBATCH --partition=lr4
-#SBATCH --qos=lr_normal
+#SBATCH --account=lr_oppie
+#SBATCH --partition=lr6
+#SBATCH --qos=condo_oppie
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --exclude=n0085.lr4,n0112.lr4,n0122.lr4
 #SBATCH --mem=16G
-#SBATCH --time=16:00:00
+#SBATCH --time=72:00:00
 #SBATCH --output=/global/scratch/users/%u/sykquench/logs/eq_%j.out
 #SBATCH --error=/global/scratch/users/%u/sykquench/logs/eq_%j.err
 #SBATCH --mail-type=END,FAIL

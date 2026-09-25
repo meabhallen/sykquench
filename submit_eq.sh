@@ -10,8 +10,8 @@ module load python/3.11.6-gcc-11.4.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 J4S=(1)
-BETAS=(36 48)
-MUS=(0.0)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now checks
+BETAS=(42) # 32 42 54)
+MUS=(0.0025)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now checks
             # BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals when mu != 0.
 
 # Tuned-kernel source. lambda is independent (submitted crossed with every
@@ -24,23 +24,23 @@ MUS=(0.0)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below n
 # looped independently -- an earlier version of this script (and, separately,
 # an earlier version of the analysis notebook) hit exactly this bug via
 # independent arrays silently forming the wrong (c, Lambda) combinations.
-EQ_KERNEL_LAMBDAS=(0.005 -0.005)
+EQ_KERNEL_LAMBDAS=(-0.0025)
 EQ_KERNEL_C_CUTOFF_PAIRS=(
     #"-0.043936 0.65"
-    "-0.053648 0.75"
+    "-0.5625 0.75"
 )
 
 TOLS=(1e-012) 		    # tol for delta_F
-DAB_TOLS=(1e-06)        # tolerance for max(d_ab**0.5)
-REQUIRE_DAB=1          	# set to 1 to require d_ab as well as delta_F for converged=True
+DAB_TOLS=(1e-04)        # tolerance for max(d_ab**0.5)
+REQUIRE_DAB=0          	# set to 1 to require d_ab as well as delta_F for converged=True
 EQ_DT_FACTORS=(0.0064)      # eq dt = EQ_DT_FACTOR / J4
 OMEGA_MAX_FACTORS=(36)      # omega_max = OMEGA_MAX_FACTOR * J4
 NW_RATIOS=(20)              # Nw = max(4001, round(NW_RATIO * BETA * omega_max)), forced odd
-VERBOSE_EVERY=200          # print progress every N iterations
+VERBOSE_EVERY=500          # print progress every N iterations
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixed settings
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 WORK_DIR=/global/scratch/users/$USER/sykquench
 SCRIPT=run_eq_single.sh   

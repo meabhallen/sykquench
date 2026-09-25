@@ -11,16 +11,16 @@ module load python/3.11.6-gcc-11.4.0
 
 J4_IS=(1)           # initial J4 values
 J4_FS=(1)        # final J4 values (quench targets)
-BETAS=(36)
+BETAS=(42 30)
 MU_FS=(0.0)         # H_M mass/spin deformation quench target; 0 = off (mu_i is read from the
                     # selected eq file itself, not set here -- see EQ_MUS below)
-EQ_MUS=(0.0)        # mu used to select which equilibrium file to quench from
+EQ_MUS=(0.0025)        # mu used to select which equilibrium file to quench from
 DT_FACTOR=0.025
 T_PRE_FACTOR=2.0
 T_POST_FACTOR=1.0
-CORR_TOL_FACTOR=1e-12           # corr_tol = CORR_TOL_FACTOR / BETA * DT / 20 * 12
+CORR_TOL_FACTOR=1e-15           # corr_tol = CORR_TOL_FACTOR / BETA * DT / 20 * 12
 N_CORR=50
-CHECKPOINT_EVERY=100
+CHECKPOINT_EVERY=200
 
 # Evolution kernel: the kernel actually applied during the real-time KBE
 # integration. Quench dynamics always run with this trivial (off) -- the
@@ -33,10 +33,11 @@ KERNEL_CUTOFFS=(2.0)   # factor of J4_i; KERNEL_CUTOFF passed to the run script 
 # by submit_eq.sh) to quench from. Must match those tuples exactly -- same
 # delta_star(Lambda) pairs, same +/-lambda values -- or find_eq_file() in
 # syk_batch_tools.py will not find a matching converged eq_runs entry.
-EQ_KERNEL_LAMBDAS=(0.005 -0.005)
+EQ_KERNEL_LAMBDAS=(-0.0025 0.0025)
 EQ_KERNEL_C_CUTOFF_PAIRS=(
     #"-0.043936 0.65"
-    "-0.053648 0.75"
+    #"-0.053648 0.75"
+    "-0.5625 0.75"
 )
 
 # Set to 1 to also accept eq_runs entries that hit max_iter without meeting
