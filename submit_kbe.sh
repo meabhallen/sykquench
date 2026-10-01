@@ -47,6 +47,15 @@ EQ_KERNEL_C_CUTOFF_PAIRS=(
 # expected at a given beta but the delta_F-converged state is good enough.
 EQ_ALLOW_NOT_CONVERGED=1
 
+# Which eq files to quench from w.r.t. clipping of the spectral function:
+#   0 (default) -- prefer unclipped; also accept a clipped (legacy) file when
+#                  clipping is inactive for that eq kernel (Im K^R >= 0
+#                  everywhere: kernel_lambda <= 0 for c=-0.5625, or lambda=0),
+#                  since the solutions are then identical.
+#   1           -- unclipped only.
+#   clipped     -- clipped (legacy) only.
+EQ_CLIP_MODE=0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 WORK_DIR=/global/scratch/users/$USER/sykquench
@@ -82,7 +91,7 @@ read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
 
     sbatch \
         --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}" \
-        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED \
+        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED,EQ_CLIP_MODE=$EQ_CLIP_MODE \
         "$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))

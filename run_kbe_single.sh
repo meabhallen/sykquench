@@ -51,6 +51,14 @@ if [ -n "${EQ_KERNEL_CUTOFF:-}" ]; then
     EQ_KERNEL_CUTOFF_FLAG="--eq-kernel-cutoff $EQ_KERNEL_CUTOFF"
 fi
 
+EQ_CLIP_FLAG=""
+case "${EQ_CLIP_MODE:-0}" in
+    0) ;;                                   # prefer unclipped, accept clipped if inactive
+    1) EQ_CLIP_FLAG="--eq-unclipped-only" ;;
+    clipped) EQ_CLIP_FLAG="--eq-clipped" ;;
+    *) echo "Unknown EQ_CLIP_MODE '$EQ_CLIP_MODE' (expected 0, 1 or clipped)." >&2; exit 1 ;;
+esac
+
 EQ_ALLOW_NOT_CONVERGED_FLAG=""
 if [ "${EQ_ALLOW_NOT_CONVERGED:-0}" = "1" ]; then
     EQ_ALLOW_NOT_CONVERGED_FLAG="--eq-allow-not-converged"
@@ -116,7 +124,7 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --eq-mu         "$EQ_MU"          \
     --eq-dir        "$WORK_DIR/eq_runs"  \
     --out-dir       "$OUT_DIR"        \
-    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG &
+    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG $EQ_CLIP_FLAG &
 
 PY_PID=$!
 wait "$PY_PID"

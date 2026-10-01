@@ -1975,6 +1975,29 @@ def run_equilibrium_grid(eq_grid: Dict[str, Iterable[Any]], *, out_dir: os.PathL
     return paths
 
 
+def kernel_clipping_is_inactive(
+    J4: float,
+    kernel_lambda: float,
+    kernel_c: float,
+    kernel_cutoff: Optional[float],
+    omega_max: float = 400.0,
+    n_omega: int = 40001,
+) -> bool:
+    """True if clipping negative A_raw cannot change the equilibrium solution.
+
+    With Im K^R(omega) >= 0 everywhere the kernel only adds damping, Im a > 0
+    in G^R = a/(a^2 - mu^2), so the exact A_raw is non-negative and clipping
+    is a no-op at the fixed point (checked: clipped and unclipped solves are
+    identical to machine precision). For kernel_c < 0 this means
+    kernel_lambda <= 0. kernel_lambda = 0 is always safe.
+    """
+    if float(kernel_lambda) == 0.0:
+        return True
+    omega = np.linspace(-omega_max, omega_max, n_omega)
+    K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff)
+    return bool(np.min(np.imag(K_R_w)) >= -1e-14 * np.max(np.abs(K_R_w)))
+
+
 def find_eq_file(
     eq_manifest: pd.DataFrame,
     J4: float,
@@ -1988,6 +2011,7 @@ def find_eq_file(
     prefer_smallest_dt: bool = True,
     allow_not_converged: bool = False,
     clip_negative_A: Optional[bool] = False,
+    accept_clipped_if_inactive: bool = False,
 ) -> pd.Series:
     """Select an equilibrium row, including its preparation kernel.
 
@@ -2031,7 +2055,11 @@ def find_eq_file(
     # Clipped and unclipped solves of the same parameters are different files
     # (clip_negative_A is in the hash); match the requested one. Legacy rows
     # without the column predate the unclipped default, so they were clipped.
-    # clip_negative_A=None accepts either.
+    # clip_negative_A=None accepts either. With clip_negative_A=False and
+    # accept_clipped_if_inactive, clipped rows are also accepted when the
+    # kernel makes clipping a no-op (kernel_clipping_is_inactive), but
+    # unclipped rows are still preferred (see sort below).
+    clip_rank = None
     if clip_negative_A is not None:
         if "clip_negative_A" in good.columns:
             stored_clip = good["clip_negative_A"].map(
@@ -2039,7 +2067,14 @@ def find_eq_file(
             )
         else:
             stored_clip = pd.Series(True, index=good.index)
-        good = good[stored_clip == bool(clip_negative_A)]
+        if (
+            not clip_negative_A
+            and accept_clipped_if_inactive
+            and kernel_clipping_is_inactive(J4, kernel_lambda, kernel_c, kernel_cutoff)
+        ):
+            clip_rank = stored_clip.astype(int)  # 0 = unclipped (preferred)
+        else:
+            good = good[stored_clip == bool(clip_negative_A)]
 
     requested_lambda = float(kernel_lambda)
     if "kernel_lambda" in good.columns:
@@ -2079,6 +2114,9 @@ def find_eq_file(
         sort_cols = ["_status_rank"]
     else:
         sort_cols = []
+    if clip_rank is not None:
+        good["_clip_rank"] = clip_rank.loc[good.index]
+        sort_cols.append("_clip_rank")
     if prefer_smallest_dt:
         good = good.sort_values(sort_cols + ["dt", "tol", "Nw"], ascending=[True] * len(sort_cols) + [True, True, False])
     else:
@@ -2119,6 +2157,7 @@ def run_kbe_one(
     eq_file: Optional[os.PathLike | str] = None,
     eq_allow_not_converged: bool = False,
     eq_clip_negative_A: bool = False,
+    eq_accept_clipped_if_inactive: bool = True,
     overwrite: bool = False,
     save_diagnostics: bool = True,
 ) -> Optional[Path]:
@@ -2151,8 +2190,14 @@ def run_kbe_one(
             kernel_cutoff=eq_kernel_cutoff,
             allow_not_converged=eq_allow_not_converged,
             clip_negative_A=eq_clip_negative_A,
+            accept_clipped_if_inactive=eq_accept_clipped_if_inactive,
         )
         eq_file = eq_row["filename"]
+        if not eq_clip_negative_A and str(eq_row.get("clip_negative_A", "True")).strip().lower() in {"true", "1", "1.0", "nan"}:
+            print(
+                "Note: no unclipped eq file found; using a clipped one, which is "
+                "identical here because Im K^R >= 0 for this kernel (clipping inactive)."
+            )
     eq_file = Path(eq_file)
 
     J_kernel = abs(float(J4_i))
@@ -2530,6 +2575,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--eq-file", default=None)
     pkbe.add_argument("--eq-allow-not-converged", action="store_true", help="Also accept eq rows that hit max_iter without meeting dab_tol (status=not_converged), not just fully converged ones.")
     pkbe.add_argument("--eq-clipped", action="store_true", help="Select eq files solved with --clip-negative-A (incl. legacy files from before unclipped became the default) instead of unclipped ones.")
+    pkbe.add_argument("--eq-unclipped-only", action="store_true", help="Only accept unclipped eq files. By default an unclipped file is preferred, but a clipped one is accepted when clipping is inactive for the eq kernel (Im K^R >= 0 everywhere, e.g. kernel_lambda <= 0 for kernel_c < 0, or kernel_lambda = 0), since the solutions are then identical.")
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
 
@@ -2596,6 +2642,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             eq_file=args.eq_file,
             eq_allow_not_converged=args.eq_allow_not_converged,
             eq_clip_negative_A=args.eq_clipped,
+            eq_accept_clipped_if_inactive=not args.eq_unclipped_only,
             overwrite=args.overwrite,
             save_diagnostics=not args.no_diagnostics,
         )
