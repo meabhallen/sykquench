@@ -31,7 +31,7 @@ EQ_KERNEL_C_CUTOFF_PAIRS=(
 )
 
 TOLS=(1e-012) 		    # tol for delta_F
-DAB_TOLS=(5e-04)        # tolerance for max(d_ab**0.5)
+DAB_TOLS=(1e-05)        # tolerance for max(d_ab**0.5)
 REQUIRE_DAB=1          	# set to 1 to require d_ab as well as delta_F for converged=True
 EQ_DT_FACTORS=(0.0064)      # eq dt = EQ_DT_FACTOR / J4
 OMEGA_MAX_FACTORS=(36)      # omega_max = OMEGA_MAX_FACTOR * J4

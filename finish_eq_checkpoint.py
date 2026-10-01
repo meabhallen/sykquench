@@ -72,6 +72,7 @@ def main() -> None:
     p.add_argument("--kernel-cutoff", type=float, default=None)
     p.add_argument("--out-dir", default="eq_runs")
     p.add_argument("--manifest-dir", default=None)
+    p.add_argument("--clip-negative-A", action="store_true", help="Record the checkpoint as coming from a clipped (--clip-negative-A) eq-one run; default matches eq-one's unclipped default. Must match the original run for the filename/hash to line up.")
     p.add_argument("--keep-checkpoint", action="store_true", help="Don't delete the .ckpt.npz after a successful write.")
     args = p.parse_args()
 
@@ -142,7 +143,7 @@ def main() -> None:
         "mixing": None, "eta_ret": float(args.eta_ret),
         "kernel_lambda": float(args.kernel_lambda), "kernel_c": float(args.kernel_c),
         "kernel_cutoff": float(kernel_cutoff),
-        "enforce_even_A": True, "clip_negative_A": True, "normalize_A": True,
+        "enforce_even_A": True, "clip_negative_A": bool(args.clip_negative_A), "normalize_A": True,
         "converged": True,
         "final_dab_sqrt_max": None,
         "note": "finished directly from a stuck checkpoint via finish_eq_checkpoint.py; "

@@ -29,8 +29,10 @@ BETAS=(64)
 MUS=(0 0.0025)           # H_M mass/spin deformation strengths to solve; 0 = off. REQUIRE_DAB=1 below
                          # checks BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals
                          # when mu != 0 (see calc_kbe_d_ab_syk_equilibrium_massdef).
+SEED_MU=0                # mu != 0 solves warm-start from the converged mu=SEED_MU solve
+                         # (same J4/beta/kernel); leave empty to cold-start every solve.
 EQ_TOL=1e-12             # tol for delta_F
-DAB_TOL=5e-4             # tolerance for max(d_ab**0.5); not enforced if REQUIRE_DAB=0 below
+DAB_TOL=1e-5             # tolerance for max(d_ab**0.5); not enforced if REQUIRE_DAB=0 below
 REQUIRE_DAB=1            # set to 1 to require d_ab as well as delta_F for converged=True
 EQ_DT_FACTOR=0.0064         # eq dt = EQ_DT_FACTOR / J4
 OMEGA_MAX_FACTOR=36      # omega_max = OMEGA_MAX_FACTOR * J4
@@ -123,6 +125,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
         --kernel-cutoff "$EQ_KERNEL_CUTOFF" \
         --verbose-every "$VERBOSE_EVERY" \
         --out-dir       "$WORK_DIR/eq_runs" \
+        ${SEED_MU:+--seed-mu "$SEED_MU"} \
         $DAB_FLAG
 
     echo ""

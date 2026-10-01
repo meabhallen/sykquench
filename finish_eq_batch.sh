@@ -17,6 +17,10 @@
 # on a compute node instead of the login node. Each call is independent and
 # guarded so one failure (e.g. an already-finished checkpoint that was
 # already deleted by a prior successful run) doesn't stop the rest.
+#
+# Pass --clip-negative-A for checkpoints from clipped eq-one runs (everything
+# before unclipped became the default, incl. all entries below); omit it for
+# checkpoints from current (unclipped) runs, or the label will be wrong.
 
 module load python/3.11.6-gcc-11.4.0
 
@@ -43,7 +47,8 @@ run \
     --kernel-lambda 0.0025 --kernel-c -0.5625 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 25921 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_36_mu_0p0025_lam_0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 run \
     --ckpt /global/scratch/users/meabhallen/sykquench/eq_runs/eq_J4_1_b_36_mu_0p0025_lam_m0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921/syk_eq_J2_0_J4_1_beta_36_mu_0p0025_klam_m0p0025_kc_m0p5625_kcut_0p75_dt_0p0064_om_36_Nw_25921_tol_1em12_90e286f0.ckpt.npz \
@@ -51,7 +56,8 @@ run \
     --kernel-lambda -0.0025 --kernel-c -0.5625 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 25921 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_36_mu_0p0025_lam_m0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 run \
     --ckpt /global/scratch/users/meabhallen/sykquench/eq_runs/eq_J4_1_b_36_mu_m0p0025_lam_0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921/syk_eq_J2_0_J4_1_beta_36_mu_m0p0025_klam_0p0025_kc_m0p5625_kcut_0p75_dt_0p0064_om_36_Nw_25921_tol_1em12_b7ee1b03.ckpt.npz \
@@ -59,7 +65,8 @@ run \
     --kernel-lambda 0.0025 --kernel-c -0.5625 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 25921 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_36_mu_m0p0025_lam_0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 run \
     --ckpt /global/scratch/users/meabhallen/sykquench/eq_runs/eq_J4_1_b_36_mu_m0p0025_lam_m0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921/syk_eq_J2_0_J4_1_beta_36_mu_m0p0025_klam_m0p0025_kc_m0p5625_kcut_0p75_dt_0p0064_om_36_Nw_25921_tol_1em12_a3be951f.ckpt.npz \
@@ -67,7 +74,8 @@ run \
     --kernel-lambda -0.0025 --kernel-c -0.5625 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 25921 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_36_mu_m0p0025_lam_m0p0025_c_m0p5625_dt_0p0064_om_36_Nw_25921 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 run \
     --ckpt /global/scratch/users/meabhallen/sykquench/eq_runs/eq_J4_1_b_48_lam_0p005_c_m0p053648_dt_0p0064_om_36_Nw_34561/syk_eq_J2_0_J4_1_beta_48_mu_0_klam_0p005_kc_m0p053648_kcut_0p75_dt_0p0064_om_36_Nw_34561_tol_1em12_7cf5bb20.ckpt.npz \
@@ -75,7 +83,8 @@ run \
     --kernel-lambda 0.005 --kernel-c -0.053648 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 34561 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_48_lam_0p005_c_m0p053648_dt_0p0064_om_36_Nw_34561 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 run \
     --ckpt /global/scratch/users/meabhallen/sykquench/eq_runs/eq_J4_1_b_48_lam_m0p005_c_m0p053648_dt_0p0064_om_36_Nw_34561/syk_eq_J2_0_J4_1_beta_48_mu_0_klam_m0p005_kc_m0p053648_kcut_0p75_dt_0p0064_om_36_Nw_34561_tol_1em12_b74e028d.ckpt.npz \
@@ -83,7 +92,8 @@ run \
     --kernel-lambda -0.005 --kernel-c -0.053648 --kernel-cutoff 0.75 \
     --dt 0.0064 --omega-max 36 --Nw 34561 --tol 1e-12 \
     --out-dir eq_runs/eq_J4_1_b_48_lam_m0p005_c_m0p053648_dt_0p0064_om_36_Nw_34561 \
-    --manifest-dir eq_runs
+    --manifest-dir eq_runs \
+    --clip-negative-A
 
 echo ""
 echo "Done. Check the manifest:"

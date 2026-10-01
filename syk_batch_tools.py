@@ -465,7 +465,7 @@ def solve_equilibrium_greater_real_time(
     mixing: float = 0.05,
     eta_ret: float = 1e-6,
     enforce_even_A: bool = True,
-    clip_negative_A: bool = True,
+    clip_negative_A: bool = False,
     normalize_A: bool = True,
     verbose_every: int = 100,
     compute_kbe_dab_every: int = 50,
@@ -695,6 +695,7 @@ def solve_equilibrium_greater_real_time(
                         kernel_c=kernel_c,
                         kernel_cutoff=kernel_cutoff,
                         omega=omega_real,
+                        beta=beta,
                         t_cut=kbe_dab_t_cut,
                         edge_skip=kbe_dab_edge_skip,
                         return_details=False,
@@ -719,6 +720,7 @@ def solve_equilibrium_greater_real_time(
                         kernel_c=kernel_c,
                         kernel_cutoff=kernel_cutoff,
                         omega=omega_real,
+                        beta=beta,
                         t_cut=kbe_dab_t_cut,
                         edge_skip=kbe_dab_edge_skip,
                         return_details=False,
@@ -1509,6 +1511,24 @@ def _conv_1d_same(A: np.ndarray, B: np.ndarray, t: np.ndarray) -> np.ndarray:
     return np.convolve(np.asarray(B) * w, np.asarray(A), mode="same")
 
 
+def _kernel_greater_t(
+    t: np.ndarray, omega: np.ndarray, K_R_w: np.ndarray, beta: float
+) -> np.ndarray:
+    """Thermal greater component of the kernel's contribution -K to Sigma.
+
+    Im K^R != 0, so the kernel acts as a bath, not a pure Hamiltonian term.
+    The frequency-domain equilibrium solver builds G^> = (1 - nF) A from
+    G^R by the fluctuation-dissipation relation, which implicitly gives that
+    bath a thermal greater component at the same beta:
+        Sigma_K^>(omega) = -i (1 - nF(omega)) * 2 Im K^R(omega)
+    (from Sigma_total^R = Sigma^R - K^R). A real-time check that adds only
+    K^R/K^A leaves this out and shows a spurious residual linear in
+    kernel_lambda (~8e-3*|lambda| in d_ab^0.5).
+    """
+    nF = 1.0 / (np.exp(np.clip(beta * omega, -500, 500)) + 1.0)
+    return -1j * omega_to_time((1.0 - nF) * 2.0 * np.imag(K_R_w), omega, t)
+
+
 def calc_kbe_d_ab_syk_equilibrium(
     t: np.ndarray,
     Ggt: np.ndarray,
@@ -1519,6 +1539,7 @@ def calc_kbe_d_ab_syk_equilibrium(
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
     omega: Optional[np.ndarray] = None,
+    beta: Optional[float] = None,
     t_cut: Optional[float] = None,
     edge_skip: int = 4,
     return_details: bool = False,
@@ -1544,7 +1565,10 @@ def calc_kbe_d_ab_syk_equilibrium(
     equilibrium solver actually converges: GR_w = 1/(omega + i*eta + K_R_w
     - Sigma_R_w)), so this can check whether a kernel-deformed equilibrium
     solution is a true fixed point of the real-time KBE dynamics. Same sign
-    convention as evolve_syk4_kbe's rhs_t1/rhs_t2.
+    convention as evolve_syk4_kbe's rhs_t1/rhs_t2. Since Im K^R != 0 the
+    kernel also gets its thermal greater component in Sigma^> (needs beta;
+    see _kernel_greater_t) -- without it the check reports a spurious
+    residual ~8e-3*|lambda| for an exact kernel-deformed solution.
 
     Returns d_ab = 0.5 * (mean_t |res_t1|^2 + mean_t |res_t2|^2).
     """
@@ -1585,6 +1609,11 @@ def calc_kbe_d_ab_syk_equilibrium(
         # Sigma_R_total = Sigma_R - K_R in the standard Dyson form.
         SR = SR - K_R_t
         SA = SA - K_A_t
+        # ...plus the kernel's thermal greater component (see
+        # _kernel_greater_t), which only enters via the Sigma^> terms below.
+        if beta is None:
+            raise ValueError("beta is required for the kernel's greater component when kernel_lambda != 0.")
+        Sgt = Sgt + _kernel_greater_t(t, omega, K_R_w, beta)
 
     dG = _central_derivative_1d(Ggt, t)
 
@@ -1639,6 +1668,7 @@ def calc_kbe_d_ab_syk_equilibrium_massdef(
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
     omega: Optional[np.ndarray] = None,
+    beta: Optional[float] = None,
     t_cut: Optional[float] = None,
     edge_skip: int = 4,
     return_details: bool = False,
@@ -1695,6 +1725,9 @@ def calc_kbe_d_ab_syk_equilibrium_massdef(
         K_A_t = np.conj(K_R_t[::-1])
         SR = SR - K_R_t
         SA = SA - K_A_t
+        if beta is None:
+            raise ValueError("beta is required for the kernel's greater component when kernel_lambda != 0.")
+        Sgt = Sgt + _kernel_greater_t(t, omega, K_R_w, beta)
 
     Goff_lt = np.conj(Goff_t)
     GoffR = theta_p * (Goff_t - Goff_lt)
@@ -1791,11 +1824,12 @@ def run_equilibrium_one(
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
     enforce_even_A: bool = True,
-    clip_negative_A: bool = True,
+    clip_negative_A: bool = False,
     normalize_A: bool = True,
     verbose_every: int = 50,
     overwrite: bool = False,
     manifest_dir: Optional[os.PathLike | str] = None,
+    seed_mu: Optional[float] = None,
 ) -> Optional[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1845,6 +1879,27 @@ def run_equilibrium_one(
 
     checkpoint_path = checkpoint_path_for(filename)
 
+    # Optional warm start from an existing converged solve at mu=seed_mu with
+    # the same J2/J4/beta/kernel (the diagonal sector differs only at O(mu^2),
+    # so a mu=0 solve is a close seed for mu!=0). Recorded in meta *after*
+    # the filename is built, so seeding never changes the file hash/lookup.
+    # Ignored when resuming from a checkpoint (the solver prefers that).
+    A_seed = omega_seed = None
+    if seed_mu is not None and not np.isclose(float(seed_mu), float(mu)):
+        try:
+            seed_row = find_eq_file(
+                load_eq_manifest_tree(manifest_dir), J4, beta, J2=J2, mu=seed_mu,
+                kernel_lambda=kernel_lambda, kernel_c=kernel_c, kernel_cutoff=kernel_cutoff,
+                clip_negative_A=clip_negative_A,
+            )
+            with np.load(seed_row["filename"], allow_pickle=False) as seed:
+                A_seed = np.array(seed["A"], copy=True)
+                omega_seed = np.array(seed["omega_real"], copy=True)
+            meta["seed_eq"] = str(seed_row["filename"])
+            print(f"Seeding from mu={seed_mu} solve: {seed_row['filename']}")
+        except FileNotFoundError as e:
+            print(f"Warning: no seed found ({e}); starting from the default guess.")
+
     print("\n============================================================")
     print("Solving equilibrium")
     print(json.dumps(meta, indent=2))
@@ -1879,6 +1934,8 @@ def run_equilibrium_one(
             verbose_every=verbose_every,
             checkpoint_path=checkpoint_path,
             checkpoint_every=200,
+            A_init=A_seed,
+            omega_init=omega_seed,
         )
         meta["converged"] = bool(converged)
         meta["final_dab_sqrt_max"] = None if not np.isfinite(final_dab_sqrt_max) else float(final_dab_sqrt_max)
@@ -1930,6 +1987,7 @@ def find_eq_file(
     kernel_cutoff: Optional[float] = None,
     prefer_smallest_dt: bool = True,
     allow_not_converged: bool = False,
+    clip_negative_A: Optional[bool] = False,
 ) -> pd.Series:
     """Select an equilibrium row, including its preparation kernel.
 
@@ -1970,6 +2028,19 @@ def find_eq_file(
             | converged_text.isin({"true", "1", "1.0"})
         ]
 
+    # Clipped and unclipped solves of the same parameters are different files
+    # (clip_negative_A is in the hash); match the requested one. Legacy rows
+    # without the column predate the unclipped default, so they were clipped.
+    # clip_negative_A=None accepts either.
+    if clip_negative_A is not None:
+        if "clip_negative_A" in good.columns:
+            stored_clip = good["clip_negative_A"].map(
+                lambda v: True if pd.isna(v) else str(v).strip().lower() in {"true", "1", "1.0"}
+            )
+        else:
+            stored_clip = pd.Series(True, index=good.index)
+        good = good[stored_clip == bool(clip_negative_A)]
+
     requested_lambda = float(kernel_lambda)
     if "kernel_lambda" in good.columns:
         stored_lambda = good["kernel_lambda"].fillna(0.0).astype(float)
@@ -1997,7 +2068,8 @@ def find_eq_file(
         raise FileNotFoundError(
             f"No converged equilibrium file found for J2={J2}, J4={J4}, "
             f"beta={beta}, mu={mu}, kernel_lambda={kernel_lambda}, "
-            f"kernel_c={kernel_c}, kernel_cutoff={kernel_cutoff}"
+            f"kernel_c={kernel_c}, kernel_cutoff={kernel_cutoff}, "
+            f"clip_negative_A={clip_negative_A}"
         )
 
     if allow_not_converged:
@@ -2046,6 +2118,7 @@ def run_kbe_one(
     out_dir: os.PathLike | str = "kbe_runs",
     eq_file: Optional[os.PathLike | str] = None,
     eq_allow_not_converged: bool = False,
+    eq_clip_negative_A: bool = False,
     overwrite: bool = False,
     save_diagnostics: bool = True,
 ) -> Optional[Path]:
@@ -2077,6 +2150,7 @@ def run_kbe_one(
             kernel_c=eq_kernel_c,
             kernel_cutoff=eq_kernel_cutoff,
             allow_not_converged=eq_allow_not_converged,
+            clip_negative_A=eq_clip_negative_A,
         )
         eq_file = eq_row["filename"]
     eq_file = Path(eq_file)
@@ -2425,6 +2499,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     peq.add_argument("--kernel-cutoff", type=float, default=None)
     peq.add_argument("--verbose-every", type=int, default=50)
     peq.add_argument("--overwrite", action="store_true")
+    peq.add_argument("--clip-negative-A", action="store_true", help="Legacy behaviour: clip negative A_raw to 0 each iteration. Off by default because when the kernel has Im K^R < 0 (kernel_lambda*kernel_c < 0) the exact solution has A_raw < 0 in the tails, and clipping biases the lambda-odd response. Part of the file hash; kbe-one only picks clipped eq files with --eq-clipped.")
+    peq.add_argument("--seed-mu", type=float, default=None, help="Warm-start from the converged eq solve at this mu with the same J2/J4/beta/kernel, looked up in the manifest (e.g. --seed-mu 0 for a mu!=0 run). Falls back to the default guess if none is found; no effect when it equals --mu. Does not change the output filename.")
     peq.add_argument("--manifest-dir", default=None, help="Directory for the shared manifest CSV, if different from --out-dir (e.g. sweeps giving each job its own --out-dir point this at the shared eq_runs/ root so every job's row lands in one master manifest as it finishes).")
 
     pkbe = sub.add_parser("kbe-one", help="Run one KBE evolution from an equilibrium npz.")
@@ -2453,6 +2529,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--out-dir", default="kbe_runs")
     pkbe.add_argument("--eq-file", default=None)
     pkbe.add_argument("--eq-allow-not-converged", action="store_true", help="Also accept eq rows that hit max_iter without meeting dab_tol (status=not_converged), not just fully converged ones.")
+    pkbe.add_argument("--eq-clipped", action="store_true", help="Select eq files solved with --clip-negative-A (incl. legacy files from before unclipped became the default) instead of unclipped ones.")
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
 
@@ -2488,6 +2565,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             verbose_every=args.verbose_every,
             overwrite=args.overwrite,
             manifest_dir=args.manifest_dir,
+            seed_mu=args.seed_mu,
+            clip_negative_A=args.clip_negative_A,
         )
     elif args.cmd == "kbe-one":
         run_kbe_one(
@@ -2516,6 +2595,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             out_dir=args.out_dir,
             eq_file=args.eq_file,
             eq_allow_not_converged=args.eq_allow_not_converged,
+            eq_clip_negative_A=args.eq_clipped,
             overwrite=args.overwrite,
             save_diagnostics=not args.no_diagnostics,
         )
