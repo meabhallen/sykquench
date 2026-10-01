@@ -25,7 +25,7 @@ J4_BETA_PAIRS=("1 60")
 
 # when PARAM_MODE=allJ4beta
 J4S=(1)
-BETAS=(40 56 64)
+BETAS=(64)
 
 
 # KBE evolution
@@ -35,7 +35,6 @@ KBE_DT_FACTORS=(0.025)          # dt = KBE_DT_FACTOR / sqrt(BETA) * 5 = 0.125/sq
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
 CORR_TOL_FACTOR=1e-15           # corr_tol = CORR_TOL_FACTOR / BETA * dt * 40 * 48 = 2.4e-13 * BETA**-1.5
-                                # (matches the beta=32/36/48 mass-deformed runs)
 N_CORR=20                       # max number of solver iterations per KBE step (unless precision reached already)
 CHECKPOINT_EVERY=500            
 
