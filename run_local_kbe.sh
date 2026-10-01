@@ -30,7 +30,7 @@ BETAS=(64)
 
 # KBE evolution
 MU_F=0.0                        # H_M mass/spin deformation quench target; 0 = off
-EQ_MU=0.0025                    # mu used to select which equilibrium file to quench from
+EQ_MUS=(0 0.0025)               # eq mus used to select which equilibrium files to quench from
 KBE_DT_FACTORS=(0.025)          # dt = KBE_DT_FACTOR / sqrt(BETA) * 5 = 0.125/sqrt(BETA)
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
@@ -95,6 +95,7 @@ for KBE_DT_FACTOR in "${KBE_DT_FACTORS[@]}"; do
     KBE_DT=$("$PYTHON" -c "print($KBE_DT_FACTOR / $BETA**0.5 * 5)")
     CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT * 40 * 48)")
 
+for EQ_MU in "${EQ_MUS[@]}"; do
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_kbe_J${J4}_beta${BETA}_dt${KBE_DT}_muf${MU_F}_eqmu${EQ_MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
@@ -131,6 +132,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     #printf "  [branch elapsed: %02d:%02d:%02d]\n" $((BRANCH_ELAPSED/3600)) $((BRANCH_ELAPSED/60%60)) $((BRANCH_ELAPSED%60))
     echo ""
     } 2>&1 | tee "$LOG_FILE"
+done
 done
 done
 done

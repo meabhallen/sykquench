@@ -26,7 +26,7 @@ J4S=(1)
 BETAS=(64)
 
 # Equilibrium solve (matches submit_eq.sh)
-MU=0.0025                # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below
+MUS=(0 0.0025)           # H_M mass/spin deformation strengths to solve; 0 = off. REQUIRE_DAB=1 below
                          # checks BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals
                          # when mu != 0 (see calc_kbe_d_ab_syk_equilibrium_massdef).
 EQ_TOL=1e-12             # tol for delta_F
@@ -98,6 +98,7 @@ print(Nw)
 ")
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
+for MU in "${MUS[@]}"; do
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_mu${MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
@@ -126,6 +127,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
 
     echo ""
     } 2>&1 | tee "$LOG_FILE"
+done
 done
 done
 
