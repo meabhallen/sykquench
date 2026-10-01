@@ -19,24 +19,11 @@ fi
 PARAM_MODE="allJ4beta"
 
 # when PARAM_MODE=pairs 
-J4_BETA_PAIRS=(
-    "1 60"
-    "1 72"
-    "2 6"
-    "2 12"
-    "2 18"
-    "2 24"
-    "2 30"
-    "2 36"
-    "3 6"
-    "3 12"
-    "3 18"
-    "3 24"
-)
+J4_BETA_PAIRS=("1 60")
 
 # when PARAM_MODE=allJ4beta
 J4S=(1)
-BETAS=(40 56)
+BETAS=(40 56 64)
 
 # Equilibrium solve (matches submit_eq.sh)
 MU=0.0025                # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below
