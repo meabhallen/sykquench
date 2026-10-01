@@ -38,17 +38,18 @@ J4_BETA_PAIRS=(
 
 # when PARAM_MODE=allJ4beta
 J4S=(1) # 2 3)
-BETAS=(36 48 60 72)
-          
+BETAS=(40 56)
+
 
 # KBE evolution
 MU_F=0.0                        # H_M mass/spin deformation quench target; 0 = off
-EQ_MU=0.0                       # mu used to select which equilibrium file to quench from
-KBE_DT_FACTORS=(0.025)          # time step size
+EQ_MU=0.0025                    # mu used to select which equilibrium file to quench from
+KBE_DT_FACTORS=(0.025)          # dt = KBE_DT_FACTOR / sqrt(BETA) * 5 = 0.125/sqrt(BETA)
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
 T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
-CORR_TOL_FACTOR=1e-12           # precision required at each KBE step = CORR_TOL_FACTOR/BETA
-N_CORR=50                       # max number of solver iterations per KBE step (unless precision reached already)
+CORR_TOL_FACTOR=1e-15           # corr_tol = CORR_TOL_FACTOR / BETA * dt * 40 * 48 = 2.4e-13 * BETA**-1.5
+                                # (matches the beta=32/36/48 mass-deformed runs)
+N_CORR=20                       # max number of solver iterations per KBE step (unless precision reached already)
 CHECKPOINT_EVERY=500            
 
 # Evolution kernel: quench dynamics run kernel-free.

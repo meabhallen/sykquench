@@ -36,16 +36,19 @@ J4_BETA_PAIRS=(
 
 # when PARAM_MODE=allJ4beta
 J4S=(1)
-BETAS=(36 48 60 72)
+BETAS=(40 56)
 
-# Equilibrium solve
-EQ_TOL=1e-12             
-DAB_TOL=1e-6             # not enforced if REQUIRE_DAB=0 below
-REQUIRE_DAB=0
+# Equilibrium solve (matches submit_eq.sh)
+MU=0.0025                # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below
+                         # checks BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals
+                         # when mu != 0 (see calc_kbe_d_ab_syk_equilibrium_massdef).
+EQ_TOL=1e-12             # tol for delta_F
+DAB_TOL=5e-4             # tolerance for max(d_ab**0.5); not enforced if REQUIRE_DAB=0 below
+REQUIRE_DAB=1            # set to 1 to require d_ab as well as delta_F for converged=True
 EQ_DT_FACTOR=0.0064         # eq dt = EQ_DT_FACTOR / J4
 OMEGA_MAX_FACTOR=36      # omega_max = OMEGA_MAX_FACTOR * J4
 NW_RATIO=20              # Nw = max(4001, round(NW_RATIO * BETA * omega_max)), forced odd
-VERBOSE_EVERY=200         # print progress every N iterations
+VERBOSE_EVERY=500         # print progress every N iterations
 
 # Initial-state equilibrium kernel: the tuned delta_star(Lambda) used to
 # prepare the pre-quench state. Pick from tuned pairs:
@@ -109,17 +112,19 @@ print(Nw)
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
-    LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_lam${EQ_KERNEL_LAMBDA}.log"
+    LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_mu${MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
     echo "============================================================"
     echo "Equilibrium solve (tuned kernel)"
-    echo "  J4=$J4 beta=$BETA dt=$EQ_DT omega_max=$OMEGA_MAX Nw=$NW"
+    echo "  J4=$J4 beta=$BETA mu=$MU dt=$EQ_DT omega_max=$OMEGA_MAX Nw=$NW"
     echo "  kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=$EQ_KERNEL_CUTOFF"
+    echo "  dab_tol=$DAB_TOL require_dab=$REQUIRE_DAB"
     echo "============================================================"
 
     "$PYTHON" -u syk_batch_tools.py eq-one \
         --J4            "$J4"            \
         --beta          "$BETA"          \
+        --mu            "$MU"            \
         --dt            "$EQ_DT"         \
         --omega-max     "$OMEGA_MAX"     \
         --Nw            "$NW"            \
