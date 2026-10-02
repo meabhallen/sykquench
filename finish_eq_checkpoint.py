@@ -46,6 +46,7 @@ import numpy as np
 
 from syk_batch_tools import (
     atomic_savez_compressed,
+    _legacy_eq_time_grid,
     build_kernel_R_w,
     equilibrium_filename,
     omega_to_time,
@@ -90,11 +91,16 @@ def main() -> None:
         A = np.array(ckpt["A"], copy=True)
         F_t = np.array(ckpt["F_t"] if "F_t" in ckpt.files else ckpt["F_tau"], copy=True)
         it_done = int(np.asarray(ckpt["it_done"]).item())
+        # Grid the checkpoint was written on: saved since the t=0 grid fix;
+        # older checkpoints used the legacy arange grid.
+        t_grid_ckpt = np.array(ckpt["t_grid"], copy=True) if "t_grid" in ckpt.files else None
 
     J2, J4, beta, mu = float(args.J2), float(args.J4), float(args.beta), float(args.mu)
     t_max = args.t_max if args.t_max is not None else max(80.0, 5.0 * beta)
     omega_real = np.linspace(-args.omega_max, args.omega_max, args.Nw)
-    t_grid = np.arange(-t_max, t_max + 0.5 * args.dt, args.dt)
+    t_grid = t_grid_ckpt if t_grid_ckpt is not None else _legacy_eq_time_grid(t_max, args.dt)
+    if len(t_grid) != len(F_t):
+        raise ValueError(f"time grid ({len(t_grid)} pts) does not match checkpoint F_t ({len(F_t)} pts); check --dt/--t-max")
     nF = 1.0 / (np.exp(np.clip(beta * omega_real, -500, 500)) + 1.0)
 
     kernel_cutoff = args.kernel_cutoff

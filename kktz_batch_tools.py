@@ -62,6 +62,20 @@ def atomic_savez(filename: os.PathLike | str, *, compressed: bool = True, **kwar
     os.replace(tmp, filename)
 
 
+def _symmetric_time_grid(t_max: float, dt: float) -> np.ndarray:
+    """t = dt*(-n..n), n = round(t_max/dt): symmetric with t=0 on the grid.
+
+    The equilibrium solvers get t -> -t by array reversal, which needs an odd
+    symmetric grid. The old arange(-t_max, t_max + dt/2, dt) shifted onto 0
+    was asymmetric by one point whenever t_max/dt was (close to) a
+    half-integer. Identical to the old grid whenever t_max/dt is an integer.
+    """
+    n = int(round(t_max / dt))
+    t = dt * np.arange(-n, n + 1, dtype=float)
+    t[n] = 0.0
+    return t
+
+
 def checkpoint_path_for(npz_path: os.PathLike | str) -> Path:
     p = Path(npz_path)
     stem = p.name[:-4] if p.name.endswith(".npz") else p.name
@@ -450,10 +464,8 @@ def solve_equilibrium_mq_real_time_matrix_v2(
     if t_max is None:
         t_max = max(120.0, 6.0 * beta)
 
-    # Use an odd number of time points centered on zero.
-    t = np.arange(-t_max, t_max + 0.5 * dt, dt)
-    i0 = int(np.argmin(np.abs(t)))
-    t = t - t[i0]
+    t = _symmetric_time_grid(t_max, dt)  # odd, symmetric, t=0 exactly on it
+    i0 = len(t) // 2
 
     omega = np.linspace(-omega_max, omega_max, Nw)
     eye = np.eye(2, dtype=complex)
@@ -698,9 +710,8 @@ def solve_equilibrium_mq_matrix_F(
     if t_max is None:
         t_max = max(120.0, 6.0 * beta)
 
-    t = np.arange(-t_max, t_max + 0.5 * dt, dt)
-    i0 = int(np.argmin(np.abs(t)))
-    t = t - t[i0]
+    t = _symmetric_time_grid(t_max, dt)  # odd, symmetric, t=0 exactly on it
+    i0 = len(t) // 2
     Nt = len(t)
     Nw_ = Nw
 
@@ -966,9 +977,8 @@ def solve_equilibrium_mq_matrix_Fv1(
     if t_max is None:
         t_max = max(120.0, 6.0 * beta)
 
-    t = np.arange(-t_max, t_max + 0.5 * dt, dt)
-    i0 = int(np.argmin(np.abs(t)))
-    t = t - t[i0]
+    t = _symmetric_time_grid(t_max, dt)  # odd, symmetric, t=0 exactly on it
+    i0 = len(t) // 2
     Nt = len(t)
     Nw_ = Nw
 
@@ -1966,9 +1976,8 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
     if t_max is None:
         t_max = max(120.0, 6.0 * beta)
 
-    t = np.arange(-t_max, t_max + 0.5 * dt, dt)
-    i0 = int(np.argmin(np.abs(t)))
-    t = t - t[i0]
+    t = _symmetric_time_grid(t_max, dt)  # odd, symmetric, t=0 exactly on it
+    i0 = len(t) // 2
     Nt = len(t)
     omega = np.linspace(-omega_max, omega_max, Nw)
     eye = np.eye(2, dtype=complex)
@@ -1985,10 +1994,16 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
 
     if ckpt and resume and ckpt.exists():
         z = np.load(ckpt, allow_pickle=True)
-        F_t = z["F_t"]
-        start_it = int(z["it"]) + 1
-        print(f"Resuming equilibrium from {ckpt} at iteration {start_it}")
-    else:
+        t_ck = np.asarray(z["t"]) if "t" in z.files else None
+        if t_ck is None or t_ck.shape != t.shape or not np.allclose(t_ck, t, rtol=0, atol=1e-6 * dt):
+            # Written on the pre-fix (asymmetric) grid: don't mix grids.
+            print(f"Checkpoint {ckpt} was written on a different time grid; starting fresh.")
+            resume = False
+        else:
+            F_t = z["F_t"]
+            start_it = int(z["it"]) + 1
+            print(f"Resuming equilibrium from {ckpt} at iteration {start_it}")
+    if not (ckpt and resume and ckpt.exists()):
         if init_GR_w is not None:
             GR0 = np.asarray(init_GR_w, dtype=complex).copy()
             if GR0.shape != (Nw, 2, 2):

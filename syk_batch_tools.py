@@ -449,6 +449,30 @@ def _build_kernel_R_t(t: np.ndarray, omega: np.ndarray, K_R_w: np.ndarray) -> np
     return K_R_t
 
 
+def eq_time_grid(t_max: float, dt: float) -> np.ndarray:
+    """Symmetric equilibrium time grid with t=0 exactly on it.
+
+    t = dt * (-n, ..., n), n = round(t_max/dt), so t_max is rounded to the
+    nearest multiple of dt (by at most dt/2). The solver gets t -> -t by
+    array reversal and puts theta(0)=1/2 at the centre point, which needs
+    both properties. The old arange(-t_max, t_max + dt/2, dt) had no point at
+    0 whenever t_max/dt was not an integer (e.g. beta=54, t_max=270,
+    dt=0.0064): theta=1/2 then landed on t=-dt/2, adding a spurious O(dt)
+    negative-time piece to Sigma^R, and for some t_max/dt the grid was not
+    symmetric either. Identical to the old grid whenever t_max/dt is an
+    integer.
+    """
+    n = int(round(t_max / dt))
+    t = dt * np.arange(-n, n + 1, dtype=float)
+    t[n] = 0.0
+    return t
+
+
+def _legacy_eq_time_grid(t_max: float, dt: float) -> np.ndarray:
+    """The pre-fix grid (see eq_time_grid), for validating old checkpoints."""
+    return np.arange(-t_max, t_max + 0.5 * dt, dt)
+
+
 def solve_equilibrium_greater_real_time(
     J2: float,
     J4: float,
@@ -528,7 +552,7 @@ def solve_equilibrium_greater_real_time(
         t_max = max(80.0, 5.0 * beta)
 
     omega_real = np.linspace(-omega_max, omega_max, Nw)
-    t_grid   = np.arange(-t_max, t_max + 0.5 * dt, dt)
+    t_grid   = eq_time_grid(t_max, dt)
     nF         = 1.0 / (np.exp(np.clip(beta * omega_real, -500, 500)) + 1.0)
 
     # Causal retarded realization of the regulated source; see build_kernel_R_w
@@ -543,6 +567,12 @@ def solve_equilibrium_greater_real_time(
     if checkpoint_path is not None and Path(checkpoint_path).exists():
         try:
             with np.load(checkpoint_path, allow_pickle=False) as ckpt:
+                # Checkpoints written before the grid was saved used the
+                # legacy grid; refuse to mix grids (start fresh instead).
+                t_ck = (np.asarray(ckpt["t_grid"]) if "t_grid" in ckpt.files
+                        else _legacy_eq_time_grid(t_max, dt))
+                if t_ck.shape != t_grid.shape or not np.allclose(t_ck, t_grid, rtol=0, atol=1e-6 * dt):
+                    raise ValueError("checkpoint was written on a different time grid")
                 A = np.array(ckpt["A"], copy=True)
                 # "F_t" is current; "F_tau" supports pre-rename checkpoints.
                 F_t = np.array(
@@ -582,6 +612,7 @@ def solve_equilibrium_greater_real_time(
                 A=checkpoint_state["A"],
                 F_t=checkpoint_state["F_t"],
                 it_done=np.array(checkpoint_state["it_done"]),
+                t_grid=t_grid,
             )
             print(
                 f"\n[{signal_name}] Equilibrium checkpoint saved at "
@@ -754,6 +785,7 @@ def solve_equilibrium_greater_real_time(
                     A=A,
                     F_t=F_t,
                     it_done=np.array(it),
+                    t_grid=t_grid,
                     dab_tol=dab_tol,
                     require_dab_convergence=bool(require_dab_convergence),
                     last_dab_sqrt_max=last_dab_sqrt_max,
@@ -781,6 +813,7 @@ def solve_equilibrium_greater_real_time(
                 A=checkpoint_state["A"],
                 F_t=checkpoint_state["F_t"],
                 it_done=np.array(checkpoint_state["it_done"]),
+                t_grid=t_grid,
             )
             print(
                 f"Eq checkpoint retained at iter={checkpoint_state['it_done']} "
@@ -931,6 +964,46 @@ def enforce_majorana_slice(G: np.ndarray, n: int) -> None:
     G[n, :n] = r
     G[:n, n] = -np.conj(r)
     G[n, n] = -0.5j
+
+
+def kbe_time_grid(t_pre: float, t_post: float, dt: float) -> Tuple[np.ndarray, int]:
+    """Uniform KBE grid with the quench exactly on a grid point.
+
+    t = dt * (-n0, ..., n_post) with n0 = round(t_pre/dt), n_post =
+    round(t_post/dt), so t_pre/t_post are rounded to the nearest multiple of
+    dt (by at most dt/2). The old construction, arange(-t_pre, ...) followed
+    by snapping the point nearest 0 to 0, made the grid non-uniform at the
+    quench whenever t_pre/dt was not an integer: the integrator still assumes
+    spacing dt, and _init_G evaluated G_eq at the snapped time, giving a
+    dt-independent error of order |t_pre/dt - round(t_pre/dt)|*dt.
+    Identical to the old grid whenever t_pre/dt is an integer.
+    """
+    n0 = int(round(t_pre / dt))
+    n_post = int(round(t_post / dt))
+    t = dt * np.arange(-n0, n_post + 1, dtype=float)
+    t[n0] = 0.0
+    return t, n0
+
+
+def _legacy_kbe_time_grid(t_pre: float, t_post: float, dt: float) -> Tuple[np.ndarray, int]:
+    """The pre-fix grid (see kbe_time_grid), for validating old checkpoints."""
+    t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
+    n0 = int(np.argmin(np.abs(t)))
+    t[n0] = 0.0
+    return t, n0
+
+
+def _check_kbe_checkpoint_grid(ckpt, t: np.ndarray, n0: int, t_pre: float, t_post: float, dt: float) -> None:
+    """Raise if a KBE checkpoint was written on a different time grid."""
+    if "t" in ckpt.files:
+        t_ck, n0_ck = np.asarray(ckpt["t"]), int(np.asarray(ckpt["n0"]).item())
+    else:  # written before the grid was saved: it used the legacy grid
+        t_ck, n0_ck = _legacy_kbe_time_grid(t_pre, t_post, dt)
+    if n0_ck != n0 or t_ck.shape != t.shape or not np.allclose(t_ck, t, rtol=0, atol=1e-6 * dt):
+        raise ValueError(
+            "checkpoint was written on a different time grid (pre-fix grid with "
+            "t_pre/dt not an integer, or different t_pre/t_post/dt)"
+        )
 
 
 def _init_G(Nt: int, n0: int, G_eq, t: np.ndarray) -> np.ndarray:
@@ -1101,9 +1174,7 @@ def evolve_syk4_kbe(
         omega, J4_i, kernel_lambda, kernel_c, kernel_cutoff
     )
 
-    t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
-    n0 = int(np.argmin(np.abs(t)))
-    t[n0] = 0.0
+    t, n0 = kbe_time_grid(t_pre, t_post, dt)
     Nt = len(t)
 
     K_R_mat = build_kernel_R_mat(t, omega, K_R_w)
@@ -1121,6 +1192,7 @@ def evolve_syk4_kbe(
     if checkpoint_path is not None and Path(checkpoint_path).exists():
         try:
             with np.load(checkpoint_path, allow_pickle=False) as ckpt:
+                _check_kbe_checkpoint_grid(ckpt, t, n0, t_pre, t_post, dt)
                 G = np.array(ckpt["G"], dtype=complex, copy=True)
                 n_start = int(np.asarray(ckpt["n_done"]).item()) + 1
                 corr_final_err[:n_start] = ckpt["corr_final_err"][:n_start]
@@ -1152,6 +1224,7 @@ def evolve_syk4_kbe(
             G=G,
             n_done=np.array(n_done),
             n0=np.array(n0),
+            t=t,
             corr_final_err=corr_final_err,
             corr_iters_used=corr_iters_used,
         )
@@ -1293,9 +1366,7 @@ def evolve_syk4_kbe_massdef(
         omega, J4_i, kernel_lambda, kernel_c, kernel_cutoff
     )
 
-    t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
-    n0 = int(np.argmin(np.abs(t)))
-    t[n0] = 0.0
+    t, n0 = kbe_time_grid(t_pre, t_post, dt)
     Nt = len(t)
 
     K_R_mat = build_kernel_R_mat(t, omega, K_R_w)
@@ -1315,6 +1386,7 @@ def evolve_syk4_kbe_massdef(
     if checkpoint_path is not None and Path(checkpoint_path).exists():
         try:
             with np.load(checkpoint_path, allow_pickle=False) as ckpt:
+                _check_kbe_checkpoint_grid(ckpt, t, n0, t_pre, t_post, dt)
                 G = np.array(ckpt["G"], dtype=complex, copy=True)
                 Goff = np.array(ckpt["Goff"], dtype=complex, copy=True)
                 n_start = int(np.asarray(ckpt["n_done"]).item()) + 1
@@ -1348,6 +1420,7 @@ def evolve_syk4_kbe_massdef(
             Goff=Goff,
             n_done=np.array(n_done),
             n0=np.array(n0),
+            t=t,
             corr_final_err=corr_final_err,
             corr_iters_used=corr_iters_used,
         )

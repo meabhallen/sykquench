@@ -90,9 +90,7 @@ def evolve_syk4_kbe_ho(
         omega, J4_i, kernel_lambda, kernel_c, kernel_cutoff
     )
 
-    t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
-    n0 = int(np.argmin(np.abs(t)))
-    t[n0] = 0.0
+    t, n0 = sbt.kbe_time_grid(t_pre, t_post, dt)  # quench exactly on the uniform grid
     Nt = len(t)
 
     K_R_mat = sbt.build_kernel_R_mat(t, omega, K_R_w)
