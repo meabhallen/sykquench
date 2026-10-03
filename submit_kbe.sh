@@ -11,12 +11,11 @@ module load python/3.11.6-gcc-11.4.0
 
 J4_IS=(1)           # initial J4 values
 J4_FS=(1)        # final J4 values (quench targets)
-BETAS=(36)
+BETAS=(32)
+EQ_MUS=(0)  # mu used to select which equilibrium file to quench from
 
-MU_FS=(0.0)         # H_M mass/spin deformation quench target; 0 = off (mu_i is read from the
-                    # selected eq file itself, not set here -- see EQ_MUS below)
-EQ_MUS=(0.0025)        # mu used to select which equilibrium file to quench from
-DT_FACTOR=0.05
+MU_FS=(0.0)         # H_M mass/spin deformation quench target; 0 = off
+DT_FACTOR=0.02
 T_PRE_FACTOR=2.0
 T_POST_FACTOR=1.0
 CORR_TOL_FACTOR=1e-16           # corr_tol = CORR_TOL_FACTOR / BETA * DT / 20 * 12
@@ -34,7 +33,7 @@ KERNEL_CUTOFFS=(2.0)   # factor of J4_i; KERNEL_CUTOFF passed to the run script 
 # by submit_eq.sh) to quench from. Must match those tuples exactly -- same
 # delta_star(Lambda) pairs, same +/-lambda values -- or find_eq_file() in
 # syk_batch_tools.py will not find a matching converged eq_runs entry.
-EQ_KERNEL_LAMBDAS=(-0.0025)
+EQ_KERNEL_LAMBDAS=(0.005 -0.005 0.0025 -0.0025)
 EQ_KERNEL_C_CUTOFF_PAIRS=(
     #"-0.043936 0.65"
     #"-0.053648 0.75"
@@ -45,7 +44,7 @@ EQ_KERNEL_C_CUTOFF_PAIRS=(
 # dab_tol (status=not_converged in syk_eq_manifest.csv), instead of requiring
 # full convergence (status=ok). Useful when d_ab convergence is slower than
 # expected at a given beta but the delta_F-converged state is good enough.
-EQ_ALLOW_NOT_CONVERGED=1
+EQ_ALLOW_NOT_CONVERGED=0
 
 # Which eq files to quench from w.r.t. clipping of the spectral function:
 #   0 (default) -- prefer unclipped; also accept a clipped (legacy) file when
@@ -79,7 +78,7 @@ for EQ_KERNEL_C_CUTOFF in "${EQ_KERNEL_C_CUTOFF_PAIRS[@]}"; do
 read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
     
     
-    DT=$(python3 -c "print($DT_FACTOR / $BETA**0.5 * 6)")
+    DT=$(python3 -c "print($DT_FACTOR / $BETA**0.5 * 5)")
     
     CORR_TOL=$(python3 -c "print($CORR_TOL_FACTOR )") # / $BETA * $DT * 40 * 48
     

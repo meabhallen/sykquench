@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --account=lr_oppie
-#SBATCH --partition=lr6
-#SBATCH --qos=condo_oppie
+#SBATCH --account=ac_onsager
+#SBATCH --partition=lr4
+#SBATCH --qos=lr_normal
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G

@@ -10,8 +10,8 @@ module load python/3.11.6-gcc-11.4.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 J4S=(1)
-BETAS=(40 56) # 32 42 54)
-MUS=(0.0025)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now checks
+BETAS=(48) # 32 42 54)
+MUS=(0 0.0025)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 below now checks
             # BOTH the diagonal (G) and off-diagonal (Goff) KBE residuals when mu != 0.
 
 # Tuned-kernel source. lambda is independent (submitted crossed with every
@@ -24,7 +24,7 @@ MUS=(0.0025)   # H_M mass/spin deformation strength; 0 = off. REQUIRE_DAB=1 belo
 # looped independently -- an earlier version of this script (and, separately,
 # an earlier version of the analysis notebook) hit exactly this bug via
 # independent arrays silently forming the wrong (c, Lambda) combinations.
-EQ_KERNEL_LAMBDAS=(-0.0025 0.0025) #.0025 -0.0025)
+EQ_KERNEL_LAMBDAS=(0.005 -0.005) #5 0.005) #.0025 -0.0025)
 EQ_KERNEL_C_CUTOFF_PAIRS=(
     #"-0.05 0.75"
     "-0.5625 0.75"
