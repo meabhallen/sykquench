@@ -45,7 +45,7 @@ VERBOSE_EVERY=500         # print progress every N iterations
 # Both signs of lambda are run below (matches submit_eq.sh): downstream
 # real-time analysis reads off the odd-in-lambda response
 # D_lambda = (G_+ - G_-)/(2*lambda), which needs a matched +/-lambda pair.
-EQ_KERNEL_LAMBDA_MAG=0.0025
+EQ_KERNEL_LAMBDA_MAGS=(0.005 0.0025)   # |lambda| values; each is run with both signs
 EQ_KERNEL_C=-0.5625 #maps to ancillary dimer model
 EQ_KERNEL_CUTOFF_FACTOR=0.75   # factor of J4
 
@@ -101,6 +101,7 @@ print(Nw)
     EQ_KERNEL_CUTOFF=$("$PYTHON" -c "print($EQ_KERNEL_CUTOFF_FACTOR * $J4)")
 
 for MU in "${MUS[@]}"; do
+for EQ_KERNEL_LAMBDA_MAG in "${EQ_KERNEL_LAMBDA_MAGS[@]}"; do
 for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     LOG_FILE="$WORK_DIR/logs/syk_eq_J${J4}_beta${BETA}_mu${MU}_lam${EQ_KERNEL_LAMBDA}.log"
     {
@@ -130,6 +131,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
 
     echo ""
     } 2>&1 | tee "$LOG_FILE"
+done
 done
 done
 done
