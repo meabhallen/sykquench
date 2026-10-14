@@ -46,7 +46,7 @@ KERNEL_CUTOFF_FACTOR=1.0    # factor of J4; inactive when KERNEL_LAMBDA=0
 # Initial-state equilibrium kernel using tuned delta_star(Lambda). Pick from tuned pairs:
 # (delta*, Lambda) = (c, cutoff_factor) in {(-0.043936, 0.65), (-0.053648, 0.75)}
 # Both signs of lambda are run below; real-time analysis reads off D_lambda = (G_+ - G_-)/(2*lambda)
-EQ_KERNEL_LAMBDA_MAGS=(0.00125)   # |lambda| values (must match run_local_eq.sh); each run with both signs
+EQ_KERNEL_LAMBDA_MAGS=(0.0025 0.00125)   # |lambda| values (must match run_local_eq.sh); each run with both signs
 EQ_KERNEL_C=-0.5625
 EQ_KERNEL_CUTOFF_FACTOR=0.75 # factor of J4
 
