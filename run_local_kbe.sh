@@ -31,12 +31,12 @@ BETAS=(64)
 # KBE evolution
 MU_F=0.0                        # H_M mass/spin deformation quench target; 0 = off
 EQ_MUS=(0 0.0025)               # eq mus used to select which equilibrium files to quench from
-KBE_DT_FACTORS=(0.025)          # dt = KBE_DT_FACTOR / sqrt(BETA) * 5 = 0.125/sqrt(BETA)
+KBE_DT_FACTORS=(0.025 0.05)     # dt = KBE_DT_FACTOR / sqrt(BETA) * 5: 0.125/sqrt(BETA) (finer) and 0.25/sqrt(BETA) (coarser)
 T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equilibrium initial condition
-T_POST_FACTOR=1.0               # time grid in units of beta taken up by pure nonequilibrium dynamics
-CORR_TOL_FACTOR=1e-15           # corr_tol = CORR_TOL_FACTOR / BETA * dt * 40 * 48 = 2.4e-13 * BETA**-1.5
+T_POST_FACTOR=1.1               # time grid in units of beta taken up by pure nonequilibrium dynamics
+CORR_TOL=1e-16                  # flat corrector tolerance (the round-off floor); beta-scaled values ~1e-15 let per-step error accumulate
 N_CORR=20                       # max number of solver iterations per KBE step (unless precision reached already)
-CHECKPOINT_EVERY=500            
+CHECKPOINT_EVERY=500
 
 # Evolution kernel: quench dynamics run kernel-free.
 KERNEL_LAMBDA=0
@@ -46,7 +46,7 @@ KERNEL_CUTOFF_FACTOR=1.0    # factor of J4; inactive when KERNEL_LAMBDA=0
 # Initial-state equilibrium kernel using tuned delta_star(Lambda). Pick from tuned pairs:
 # (delta*, Lambda) = (c, cutoff_factor) in {(-0.043936, 0.65), (-0.053648, 0.75)}
 # Both signs of lambda are run below; real-time analysis reads off D_lambda = (G_+ - G_-)/(2*lambda)
-EQ_KERNEL_LAMBDA_MAGS=(0.005 0.0025)   # |lambda| values (must match run_local_eq.sh); each run with both signs
+EQ_KERNEL_LAMBDA_MAGS=(0.00125)   # |lambda| values (must match run_local_eq.sh); each run with both signs
 EQ_KERNEL_C=-0.5625
 EQ_KERNEL_CUTOFF_FACTOR=0.75 # factor of J4
 
@@ -93,7 +93,6 @@ for PAIR in "${PARAM_PAIRS[@]}"; do
 
 for KBE_DT_FACTOR in "${KBE_DT_FACTORS[@]}"; do
     KBE_DT=$("$PYTHON" -c "print($KBE_DT_FACTOR / $BETA**0.5 * 5)")
-    CORR_TOL=$("$PYTHON" -c "print($CORR_TOL_FACTOR / $BETA * $KBE_DT * 40 * 48)")
 
 for EQ_MU in "${EQ_MUS[@]}"; do
 for EQ_KERNEL_LAMBDA_MAG in "${EQ_KERNEL_LAMBDA_MAGS[@]}"; do
