@@ -958,6 +958,74 @@ def rhs_t2(
     return +1j * (I1 + I2)
 
 
+def _trap_upper(X: np.ndarray, dt: float) -> np.ndarray:
+    """In place: X[k, j] *= trap_weights(j + 1, dt)[k] for k <= j and X[k, j] = 0 for k > j. Returns X.
+
+    Then x @ X is the trapezoidal sum over k <= j of x[k] X[k, j], for every column j at once.
+    """
+    n = X.shape[0]
+    X *= dt
+    X *= np.arange(n)[:, None] <= np.arange(n)[None, :]
+    X[0, :] *= 0.5            # first point of every sum
+    X.flat[::n + 1] *= 0.5    # last point (k = j)
+    X[0, 0] *= 2.0            # a single point carries dt/2, not dt/4
+    return X
+
+
+def _trap_triangle(G_block: np.ndarray, dt: float) -> np.ndarray:
+    """M[k, j] = trap_weights(j + 1, dt)[k] * G_A(k, j) for k <= j (0 below the diagonal), G_A(k, j) = -(G[k, j] + G[j, k]).
+
+    With it the I2 sums of rhs_t1 for a whole row are S[i, :n] @ M, and the I1 sums of rhs_t2 for a whole column are
+    -(S[:n, j] @ M), since rhs_t2's weighted G_R(i, k) = G[i, k] + G[k, i] over k <= i is -M[k, i].
+    """
+    return _trap_upper(-(G_block + G_block.T), dt)
+
+
+def _rhs_row_col_old(
+    G: np.ndarray, S: np.ndarray, M: np.ndarray, n: int, dt: float,
+    K_R_mat: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """rhs_t1(G, S, n-1, j) for j < n and rhs_t2(G, S, i, n-1) for i < n, as vectors; M = _trap_triangle(G[:n, :n], dt)."""
+    i = n - 1
+    w = trap_weights(n, dt)
+    Gb = G[:n, :n]
+    Sigma_R = S[i, :n] + S[:n, i]
+    if K_R_mat is not None:
+        Sigma_R = Sigma_R - K_R_mat[i, :n]
+    d1 = -1j * ((w * Sigma_R) @ Gb + S[i, :n] @ M)
+    Sigma_A = -(S[:n, i] + S[i, :n])
+    if K_R_mat is not None:
+        Sigma_A = Sigma_A - np.conj(K_R_mat[i, :n])
+    d2 = 1j * (-(S[:n, i] @ M) + Gb @ (w * Sigma_A))
+    return d1, d2
+
+
+def _rhs_row_col_new(
+    G: np.ndarray, S: np.ndarray, M: np.ndarray, n: int, dt: float,
+    K_R_mat: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """rhs_t1(G, S, n, j) for j < n and rhs_t2(G, S, i, n) for i < n, as vectors, with the current row/column n of G."""
+    w = trap_weights(n + 1, dt)
+    Gb = G[:n, :n]
+    Sigma_R = S[n, :n + 1] + S[:n + 1, n]
+    if K_R_mat is not None:
+        Sigma_R = Sigma_R - K_R_mat[n, :n + 1]
+    I1 = (w[:n] * Sigma_R[:n]) @ Gb + (w[n] * Sigma_R[n]) * G[n, :n]
+    d1 = -1j * (I1 + S[n, :n] @ M)
+    Sigma_A = -(S[:n + 1, n] + S[n, :n + 1])
+    if K_R_mat is not None:
+        Sigma_A = Sigma_A - np.conj(K_R_mat[n, :n + 1])
+    I2 = Gb @ (w[:n] * Sigma_A[:n]) + G[:n, n] * (w[n] * Sigma_A[n])
+    d2 = 1j * (-(S[:n, n] @ M) + I2)
+    return d1, d2
+
+
+def _sigma_update_slice(S: np.ndarray, G: np.ndarray, JJ2: np.ndarray, JJ4: np.ndarray, n: int) -> None:
+    """Recompute Sigma^> on row and column n only (the only entries of G that changed)."""
+    S[n, :n + 1] = sigma_greater_syk4(G[n, :n + 1], JJ2[n, :n + 1], JJ4[n, :n + 1])
+    S[:n, n] = sigma_greater_syk4(G[:n, n], JJ2[:n, n], JJ4[:n, n])
+
+
 def enforce_majorana_slice(G: np.ndarray, n: int) -> None:
     """Enforce Majorana conjugation on the newest row/column and G(t,t)=-i/2."""
     r = 0.5 * (G[n, :n] - np.conj(G[:n, n]))
@@ -1112,6 +1180,57 @@ def dGoff_dt2_massdef(
     return +1j * (I1 + I2) + mu_of_t[j] * G[i, j]
 
 
+def _trap_off_triangles(Goff_block: np.ndarray, dt: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Weighted triangles for the Goff memory sums on the n x n block, with X = Goff - conj(Goff):
+    MA[k, j] = trap_weights(j + 1, dt)[k] * Goff_A(k, j), Goff_A = conj(Goff) - Goff = -X (I2 of dGoff_dt1: S[i, :n] @ MA);
+    MR[k, i] = trap_weights(i + 1, dt)[k] * Goff_R(i, k), Goff_R(i, k) = X[i, k] (I1 of dGoff_dt2: S[:n, j] @ MR)."""
+    X = Goff_block - np.conj(Goff_block)
+    return _trap_upper(-X, dt), _trap_upper(np.ascontiguousarray(X.T), dt)
+
+
+def _rhs_massdef_old(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, M: np.ndarray, MA: np.ndarray, MR: np.ndarray,
+    mu_of_t: np.ndarray, n: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """dG_dt1/dG_dt2/dGoff_dt1/dGoff_dt2_massdef on row n-1 (j < n) and column n-1 (i < n), as vectors."""
+    i = n - 1
+    d1, d2 = _rhs_row_col_old(G, S, M, n, dt, K_R_mat)
+    d1 = d1 + mu_of_t[i] * Goff[i, :n]
+    d2 = d2 - mu_of_t[i] * np.conj(Goff[i, :n])
+    w = trap_weights(n, dt)
+    Gob = Goff[:n, :n]
+    Sigma_R = S[i, :n] + S[:n, i]
+    if K_R_mat is not None:
+        Sigma_R = Sigma_R - K_R_mat[i, :n]
+    o1 = -1j * ((w * Sigma_R) @ Gob + S[i, :n] @ MA) - mu_of_t[i] * G[i, :n]
+    Sigma_A = -(S[:n, i] + S[i, :n])
+    if K_R_mat is not None:
+        Sigma_A = Sigma_A - np.conj(K_R_mat[i, :n])
+    o2 = 1j * (S[:n, i] @ MR + Gob @ (w * Sigma_A)) + mu_of_t[i] * G[:n, i]
+    return d1, d2, o1, o2
+
+
+def _rhs_massdef_new(
+    G: np.ndarray, Goff: np.ndarray, S: np.ndarray, M: np.ndarray, MA: np.ndarray, MR: np.ndarray,
+    mu_of_t: np.ndarray, n: int, dt: float, K_R_mat: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The same on row n (j < n) and column n (i < n), with the current row/column n of G and Goff."""
+    d1, d2 = _rhs_row_col_new(G, S, M, n, dt, K_R_mat)
+    d1 = d1 + mu_of_t[n] * Goff[n, :n]
+    d2 = d2 - mu_of_t[n] * np.conj(Goff[n, :n])
+    w = trap_weights(n + 1, dt)
+    Gob = Goff[:n, :n]
+    Sigma_R = S[n, :n + 1] + S[:n + 1, n]
+    if K_R_mat is not None:
+        Sigma_R = Sigma_R - K_R_mat[n, :n + 1]
+    o1 = -1j * ((w[:n] * Sigma_R[:n]) @ Gob + (w[n] * Sigma_R[n]) * Goff[n, :n] + S[n, :n] @ MA) - mu_of_t[n] * G[n, :n]
+    Sigma_A = -(S[:n + 1, n] + S[n, :n + 1])
+    if K_R_mat is not None:
+        Sigma_A = Sigma_A - np.conj(K_R_mat[n, :n + 1])
+    o2 = 1j * (S[:n, n] @ MR + Gob @ (w[:n] * Sigma_A[:n]) + Goff[:n, n] * (w[n] * Sigma_A[n])) + mu_of_t[n] * G[:n, n]
+    return d1, d2, o1, o2
+
+
 def _init_Goff(Nt: int, n0: int, Goff_eq, t: np.ndarray) -> np.ndarray:
     """Initialise the pre-quench Goff block. Unlike _init_G, no symmetry
     shortcut is available (Goff has no self-antisymmetry), and Goff(t,t) is
@@ -1254,10 +1373,12 @@ def evolve_syk4_kbe(
         signal.SIGTERM: _checkpoint_then_exit,
     }):
         # ── Main time-stepping loop ───────────────────────────────────────────────
+        # Same scheme as rhs_t1/rhs_t2 called per element, vectorised: the memory sums for a whole row/column are
+        # matrix-vector products, and Sigma^> is recomputed only where G changed (row/column n).
+        S = sigma_greater_syk4(G, JJ2, JJ4)
         for n in range(n_start, Nt):
-            S      = sigma_greater_syk4(G, JJ2, JJ4)
-            d1_old = np.array([rhs_t1(G, S, n - 1, j, dt, K_R_mat) for j in range(n)], dtype=complex)
-            d2_old = np.array([rhs_t2(G, S, i, n - 1, dt, K_R_mat) for i in range(n)], dtype=complex)
+            M = _trap_triangle(G[:n, :n], dt)
+            d1_old, d2_old = _rhs_row_col_old(G, S, M, n, dt, K_R_mat)
 
             G[n, :n] = G[n - 1, :n] + dt * d1_old
             G[:n, n] = G[:n, n - 1] + dt * d2_old
@@ -1269,9 +1390,8 @@ def evolve_syk4_kbe(
             for it in range(n_corr):
                 row_old = G[n, :n].copy()
                 col_old = G[:n, n].copy()
-                S      = sigma_greater_syk4(G, JJ2, JJ4)
-                d1_new = np.array([rhs_t1(G, S, n, j, dt, K_R_mat) for j in range(n)], dtype=complex)
-                d2_new = np.array([rhs_t2(G, S, i, n, dt, K_R_mat) for i in range(n)], dtype=complex)
+                _sigma_update_slice(S, G, JJ2, JJ4, n)
+                d1_new, d2_new = _rhs_row_col_new(G, S, M, n, dt, K_R_mat)
 
                 G[n, :n] = G[n - 1, :n] + 0.5 * dt * (d1_old + d1_new)
                 G[:n, n] = G[:n, n - 1] + 0.5 * dt * (d2_old + d2_new)
@@ -1285,6 +1405,7 @@ def evolve_syk4_kbe(
                 it_used = it + 1
                 if err < corr_tol:
                     break
+            _sigma_update_slice(S, G, JJ2, JJ4, n)
 
             corr_final_err[n]  = err
             corr_iters_used[n] = it_used
@@ -1447,24 +1568,13 @@ def evolve_syk4_kbe_massdef(
         signal.SIGUSR1: _checkpoint_then_exit,
         signal.SIGTERM: _checkpoint_then_exit,
     }):
+        # Vectorised as in evolve_syk4_kbe: whole rows/columns of dG_dt1/dG_dt2/dGoff_dt1/dGoff_dt2_massdef per matrix-vector
+        # product, Sigma^> (from the diagonal G only) recomputed on row/column n only.
+        S = sigma_greater_syk4(G, JJ2, JJ4)
         for n in range(n_start, Nt):
-            S = sigma_greater_syk4(G, JJ2, JJ4)
-            d1_old = np.array(
-                [dG_dt1_massdef(G, Goff, S, mu_of_t, n - 1, j, dt, K_R_mat) for j in range(n)],
-                dtype=complex,
-            )
-            d2_old = np.array(
-                [dG_dt2_massdef(G, Goff, S, mu_of_t, i, n - 1, dt, K_R_mat) for i in range(n)],
-                dtype=complex,
-            )
-            doff1_old = np.array(
-                [dGoff_dt1_massdef(G, Goff, S, mu_of_t, n - 1, j, dt, K_R_mat) for j in range(n)],
-                dtype=complex,
-            )
-            doff2_old = np.array(
-                [dGoff_dt2_massdef(G, Goff, S, mu_of_t, i, n - 1, dt, K_R_mat) for i in range(n)],
-                dtype=complex,
-            )
+            M = _trap_triangle(G[:n, :n], dt)
+            MA, MR = _trap_off_triangles(Goff[:n, :n], dt)
+            d1_old, d2_old, doff1_old, doff2_old = _rhs_massdef_old(G, Goff, S, M, MA, MR, mu_of_t, n, dt, K_R_mat)
 
             G[n, :n] = G[n - 1, :n] + dt * d1_old
             G[:n, n] = G[:n, n - 1] + dt * d2_old
@@ -1486,23 +1596,8 @@ def evolve_syk4_kbe_massdef(
                 rowoff_old = Goff[n, :n].copy()
                 coloff_old = Goff[:n, n].copy()
 
-                S = sigma_greater_syk4(G, JJ2, JJ4)
-                d1_new = np.array(
-                    [dG_dt1_massdef(G, Goff, S, mu_of_t, n, j, dt, K_R_mat) for j in range(n)],
-                    dtype=complex,
-                )
-                d2_new = np.array(
-                    [dG_dt2_massdef(G, Goff, S, mu_of_t, i, n, dt, K_R_mat) for i in range(n)],
-                    dtype=complex,
-                )
-                doff1_new = np.array(
-                    [dGoff_dt1_massdef(G, Goff, S, mu_of_t, n, j, dt, K_R_mat) for j in range(n)],
-                    dtype=complex,
-                )
-                doff2_new = np.array(
-                    [dGoff_dt2_massdef(G, Goff, S, mu_of_t, i, n, dt, K_R_mat) for i in range(n)],
-                    dtype=complex,
-                )
+                _sigma_update_slice(S, G, JJ2, JJ4, n)
+                d1_new, d2_new, doff1_new, doff2_new = _rhs_massdef_new(G, Goff, S, M, MA, MR, mu_of_t, n, dt, K_R_mat)
 
                 G[n, :n] = G[n - 1, :n] + 0.5 * dt * (d1_old + d1_new)
                 G[:n, n] = G[:n, n - 1] + 0.5 * dt * (d2_old + d2_new)
@@ -1524,6 +1619,7 @@ def evolve_syk4_kbe_massdef(
                 it_used = it + 1
                 if err < corr_tol:
                     break
+            _sigma_update_slice(S, G, JJ2, JJ4, n)
 
             corr_final_err[n] = err
             corr_iters_used[n] = it_used
