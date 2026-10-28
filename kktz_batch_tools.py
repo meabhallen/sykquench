@@ -30,6 +30,7 @@ if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
     np.trapz = np.trapezoid
 import pandas as pd
 from scipy.interpolate import interp1d
+from scipy.signal import ZoomFFT, fftconvolve
 import signal
 
 
@@ -167,30 +168,63 @@ def _trap_weights_grid(x):
     dx = x[1] - x[0]
     return _trap_weights_uniform_from_dx(len(x), dx)
 
-''' Fourier transforms, same as single SYK'''
+# Uniform-grid Fourier quadrature accelerated with reusable chirp-z transforms.
+# The underlying trapezoidal sums and Fourier sign conventions are unchanged.
+class KKTZFourierPlan:
+    def __init__(self, t, omega):
+        self.t = np.asarray(t, dtype=float)
+        self.omega = np.asarray(omega, dtype=float)
+        if len(self.t) < 2 or len(self.omega) < 2:
+            raise ValueError("Fourier grids must have at least two points")
+        self.dt = float(self.t[1] - self.t[0])
+        self.dw = float(self.omega[1] - self.omega[0])
+        if self.dt <= 0 or self.dw <= 0:
+            raise ValueError("Fourier grids must be increasing")
+        if not (np.allclose(np.diff(self.t), self.dt, rtol=1e-10, atol=1e-12)
+                and np.allclose(np.diff(self.omega), self.dw, rtol=1e-10, atol=1e-12)):
+            raise ValueError("Fourier grids must be uniform")
+        self.t2w = ZoomFFT(len(self.t), [self.omega[0], self.omega[-1]],
+                            m=len(self.omega), fs=2 * np.pi / self.dt, endpoint=True)
+        self.w2t = ZoomFFT(len(self.omega), [self.t[0], self.t[-1]],
+                            m=len(self.t), fs=2 * np.pi / self.dw, endpoint=True)
+        self.t2w_shift = np.exp(1j * self.omega * self.t[0])
+        self.w2t_shift = np.exp(-1j * self.omega[0] * self.t)
+        self.wt = _trap_weights_grid(self.t)
+        self.ww = _trap_weights_grid(self.omega) / (2 * np.pi)
 
-def _time_to_omega_mat(X_t, t, omega, chunk=384):
-    t = np.asarray(t)
-    omega = np.asarray(omega)
-    wt = _trap_weights_grid(t)
-    Xt = np.asarray(X_t) * wt[:, None, None]
-    out = np.empty((len(omega), 2, 2), dtype=complex)
-    for a in range(0, len(omega), chunk):
-        phase = np.exp(1j * np.outer(omega[a:a+chunk], t))
-        out[a:a+chunk] = np.einsum("ot,tab->oab", phase, Xt, optimize=True)
-    return out
+    def time_to_omega(self, X_t):
+        X = np.asarray(X_t)
+        if X.shape != (len(self.t), 2, 2):
+            raise ValueError("Expected (Nt,2,2) input")
+        weighted = X * self.wt[:, None, None]
+        out = np.empty((len(self.omega), 2, 2), dtype=complex)
+        for a in range(2):
+            for b in range(2):
+                out[:, a, b] = self.t2w_shift * np.conj(self.t2w(np.conj(weighted[:, a, b])))
+        return out
+
+    def omega_to_time(self, X_w):
+        X = np.asarray(X_w)
+        if X.shape != (len(self.omega), 2, 2):
+            raise ValueError("Expected (Nw,2,2) input")
+        weighted = X * self.ww[:, None, None]
+        out = np.empty((len(self.t), 2, 2), dtype=complex)
+        for a in range(2):
+            for b in range(2):
+                out[:, a, b] = self.w2t_shift * self.w2t(weighted[:, a, b])
+        return out
 
 
-def _omega_to_time_mat(X_w, omega, t, chunk=384):
-    omega = np.asarray(omega)
-    t = np.asarray(t)
-    ww = _trap_weights_grid(omega) / (2.0 * np.pi)
-    Xw = np.asarray(X_w) * ww[:, None, None]
-    out = np.empty((len(t), 2, 2), dtype=complex)
-    for a in range(0, len(t), chunk):
-        phase = np.exp(-1j * np.outer(t[a:a+chunk], omega))
-        out[a:a+chunk] = np.einsum("to,oab->tab", phase, Xw, optimize=True)
-    return out
+def _time_to_omega_mat(X_t, t, omega, chunk=384, plan=None):
+    if plan is None:
+        plan = KKTZFourierPlan(t, omega)
+    return plan.time_to_omega(X_t)
+
+
+def _omega_to_time_mat(X_w, omega, t, chunk=384, plan=None):
+    if plan is None:
+        plan = KKTZFourierPlan(t, omega)
+    return plan.omega_to_time(X_w)
 
 
 def h_mu_matrix(mu):
@@ -468,6 +502,7 @@ def solve_equilibrium_mq_real_time_matrix_v2(
     i0 = len(t) // 2
 
     omega = np.linspace(-omega_max, omega_max, Nw)
+    fourier_plan = KKTZFourierPlan(t, omega)
     eye = np.eye(2, dtype=complex)
     h = h_mu_matrix(mu)
 
@@ -485,7 +520,7 @@ def solve_equilibrium_mq_real_time_matrix_v2(
             #GR0[k] = np.linalg.inv((w + 1j * max(eta_ret, 0.05)) * eye - h)
             GR0[k] = np.linalg.inv((w + 1j * max(eta_ret, 0.05)) * eye +h)
         Ggt_w0 = wightman_from_GR_mq(omega, GR0, beta)
-        Ggt = _omega_to_time_mat(Ggt_w0, omega, t)
+        Ggt = _omega_to_time_mat(Ggt_w0, omega, t, plan=fourier_plan)
     print("Initial Ggt_w_LR at k=Nw//2+100:", Ggt_w0[Nw//2+100, 0, 1])
     print("Initial Ggt_LR t=0:", Ggt[len(t)//2, 0, 1])
     print("Initial Ggt_LR t=dt:", Ggt[len(t)//2+1, 0, 1])
@@ -497,14 +532,14 @@ def solve_equilibrium_mq_real_time_matrix_v2(
         Sgt = -J**2 * Ggt**3
         #Sgt = -J**2 * Ggt**3 + h
         Sigma_R_t = retarded_self_energy_from_greater(Sgt, t)
-        Sigma_R_w = _time_to_omega_mat(Sigma_R_t, t, omega)
+        Sigma_R_w = _time_to_omega_mat(Sigma_R_t, t, omega, plan=fourier_plan)
 
         GR_new = np.empty((Nw, 2, 2), dtype=complex)
         for k, w in enumerate(omega):
             GR_new[k] = np.linalg.inv((w + 1j * eta_ret) * eye - h - Sigma_R_w[k])
 
         Ggt_w_new = wightman_from_GR_mq(omega, GR_new, beta)
-        Ggt_new = _omega_to_time_mat(Ggt_w_new, omega, t)
+        Ggt_new = _omega_to_time_mat(Ggt_w_new, omega, t, plan=fourier_plan)
 
         # enforce exact equal-time Majorana normalization on the diagonal only;
         # do not touch LR/RL.
@@ -716,6 +751,7 @@ def solve_equilibrium_mq_matrix_F(
     Nw_ = Nw
 
     omega = np.linspace(-omega_max, omega_max, Nw_)
+    fourier_plan = KKTZFourierPlan(t, omega)
     eye = np.eye(2, dtype=complex)
     h = h_mu_matrix(mu)
 
@@ -753,7 +789,7 @@ def solve_equilibrium_mq_matrix_F(
     F_w[:, 0, 1] = 1j * one_minus_nF * B_LR_init
     F_w[:, 1, 0] = 1j * one_minus_nF * B_RL_init
 
-    F_t = _omega_to_time_mat(F_w, omega, t)
+    F_t = _omega_to_time_mat(F_w, omega, t, plan=fourier_plan)
 
     GR_w = None
     delta = np.inf
@@ -768,7 +804,7 @@ def solve_equilibrium_mq_matrix_F(
         iSgt_flipped = np.transpose(iSgt[::-1], (0, 2, 1))
         iSR_t = theta[:, None, None] * (iSgt + iSgt_flipped)
 
-        iSR_w = _time_to_omega_mat(iSR_t, t, omega)
+        iSR_w = _time_to_omega_mat(iSR_t, t, omega, plan=fourier_plan)
         SR_w = -1j * iSR_w
 
         # Dyson equation
@@ -813,7 +849,7 @@ def solve_equilibrium_mq_matrix_F(
         F_w_new[:, 0, 1] = 1j * one_minus_nF * B_LR_new
         F_w_new[:, 1, 0] = 1j * one_minus_nF * B_RL_new
 
-        F_t_new = _omega_to_time_mat(F_w_new, omega, t)
+        F_t_new = _omega_to_time_mat(F_w_new, omega, t, plan=fourier_plan)
 
         # Equal-time pins
         #F_t_new[i0, 0, 0] = 0.5
@@ -983,6 +1019,7 @@ def solve_equilibrium_mq_matrix_Fv1(
     Nw_ = Nw
 
     omega = np.linspace(-omega_max, omega_max, Nw_)
+    fourier_plan = KKTZFourierPlan(t, omega)
     eye = np.eye(2, dtype=complex)
     h = h_mu_matrix(mu)  # h = i * [[0,mu],[-mu,0]]
 
@@ -1030,7 +1067,7 @@ def solve_equilibrium_mq_matrix_Fv1(
     F_w[:, 1, 0] = 1j * one_minus_nF * B_RL_init
 
     # F_t = i G^> in time domain
-    F_t = _omega_to_time_mat(F_w, omega, t)
+    F_t = _omega_to_time_mat(F_w, omega, t, plan=fourier_plan)
 
     GR_w = None
 
@@ -1059,7 +1096,7 @@ def solve_equilibrium_mq_matrix_Fv1(
         iSR_t = theta[:, None, None] * (iSgt + iSgt_flipped)
 
         # Fourier to frequency: i Sigma^R(omega)
-        iSR_w = _time_to_omega_mat(iSR_t, t, omega)
+        iSR_w = _time_to_omega_mat(iSR_t, t, omega, plan=fourier_plan)
 
         # Sigma^R(omega) = iSR_w / i = -i * iSR_w
         SR_w = -1j * iSR_w
@@ -1099,7 +1136,7 @@ def solve_equilibrium_mq_matrix_Fv1(
         F_w_new[:, 0, 1] = 1j * one_minus_nF * B_LR_new
         F_w_new[:, 1, 0] = 1j * one_minus_nF * B_RL_new
 
-        F_t_new = _omega_to_time_mat(F_w_new, omega, t)
+        F_t_new = _omega_to_time_mat(F_w_new, omega, t, plan=fourier_plan)
 
         # Equal-time pins:
         #   Diagonal:    F_aa(t=0) = +0.5  [from G^>_aa(0) = -i/2]
@@ -1363,7 +1400,7 @@ def _conv_1d_same(A, B, t):
     for scalar arrays on a symmetric uniform grid.
     """
     w = _trap_weights_grid(t)
-    return np.convolve(B * w, A, mode="same")
+    return fftconvolve(B * w, A, mode="same")
 
 
 def _conv_mat_same(A, B, t):
@@ -1386,7 +1423,7 @@ def _conv_mat_same(A, B, t):
         for b in range(2):
             tmp = np.zeros(Nt, dtype=complex)
             for c in range(2):
-                tmp += np.convolve(B[:, c, b] * w, A[:, a, c], mode="same")
+                tmp += fftconvolve(B[:, c, b] * w, A[:, a, c], mode="same")
             C[:, a, b] = tmp
 
     return C
@@ -1980,6 +2017,7 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
     i0 = len(t) // 2
     Nt = len(t)
     omega = np.linspace(-omega_max, omega_max, Nw)
+    fourier_plan = KKTZFourierPlan(t, omega)
     eye = np.eye(2, dtype=complex)
     h = h_mu_matrix(mu)
     nF = 1.0 / (np.exp(np.clip(beta * omega, -500, 500)) + 1.0)
@@ -2030,7 +2068,7 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
         F_w[:, 1, 1] = one_minus_nF * A_RR_init
         F_w[:, 0, 1] = 1j * one_minus_nF * B_LR_init
         F_w[:, 1, 0] = 1j * one_minus_nF * B_RL_init
-        F_t = _omega_to_time_mat(F_w, omega, t)
+        F_t = _omega_to_time_mat(F_w, omega, t, plan=fourier_plan)
 
     converged = False
     delta = np.inf
@@ -2090,7 +2128,7 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
         iSgt = i_sigma_greater_kktz_from_F(F_t, J, alpha)
         iSgt_flipped = np.transpose(iSgt[::-1], (0, 2, 1))
         iSR_t = theta[:, None, None] * (iSgt + iSgt_flipped)
-        iSR_w = _time_to_omega_mat(iSR_t, t, omega)
+        iSR_w = _time_to_omega_mat(iSR_t, t, omega, plan=fourier_plan)
         SR_w = -1j * iSR_w
 
         GR_w = np.empty((Nw, 2, 2), dtype=complex)
@@ -2124,7 +2162,7 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
         F_w_new[:, 1, 1] = one_minus_nF * A_RR_new
         F_w_new[:, 0, 1] = 1j * one_minus_nF * B_LR_new
         F_w_new[:, 1, 0] = 1j * one_minus_nF * B_RL_new
-        F_t_new = _omega_to_time_mat(F_w_new, omega, t)
+        F_t_new = _omega_to_time_mat(F_w_new, omega, t, plan=fourier_plan)
 
         if pin_equal_time:
             F_t_new[i0, 0, 0] = 0.5
@@ -2200,7 +2238,7 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
         # Happens only if max_iter was already completed by a resumed checkpoint.
         iSgt = i_sigma_greater_kktz_from_F(F_t, J, alpha)
         iSR_t = theta[:, None, None] * (iSgt + np.transpose(iSgt[::-1], (0, 2, 1)))
-        SR_w = -1j * _time_to_omega_mat(iSR_t, t, omega)
+        SR_w = -1j * _time_to_omega_mat(iSR_t, t, omega, plan=fourier_plan)
         GR_w = np.empty((Nw, 2, 2), dtype=complex)
         for k, w in enumerate(omega):
             GR_w[k] = np.linalg.inv((w + 1j * eta_ret) * eye - h - SR_w[k])
@@ -2803,7 +2841,9 @@ def run_equilibrium_one(
             **init_kwargs,
         )
         row = dict(meta)
-        row.update({"filename": str(filename), "status": "ok"})
+        with np.load(filename, allow_pickle=False) as result_file:
+            saved_meta = json.loads(str(result_file["metadata_json"].item()))
+        row.update({"filename": str(filename), "status": "ok" if saved_meta.get("converged", False) else "not_converged"})
         update_manifest(manifest_path, row)
         print("Saved:", filename)
         return filename
