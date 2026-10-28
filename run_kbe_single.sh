@@ -47,7 +47,7 @@ DELTA_G=${DELTA_G:-0}
 DG_FLAGS=""
 if [ "$DELTA_G" = "1" ]; then
     OUT_DIR="kbe_runs_dG/${TAG}_dG"
-    DG_FLAGS="--delta-g --dg-corr-tol ${DG_CORR_TOL:-1e-19}"
+    DG_FLAGS="--delta-g --dg-corr-tol ${DG_CORR_TOL:-1e-19} --dg-residual ${DG_RESIDUAL:-auto}"
     if [ -n "${REF_EQ_FILE:-}" ]; then DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"; fi
 fi
 

@@ -39,6 +39,7 @@ N_CORR=20                       # max number of solver iterations per KBE step (
 DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref, lower round-off floor); output in $WORK_DIR/kbe_runs_dG
 REF_EQ_FILE=""                  # lambda = mu = 0 eq npz at the same beta (optional: default looks it up in eq_runs)
 DG_CORR_TOL=1e-19
+DG_RESIDUAL=auto                # delta-G residual precision: auto (extended up to Nt = 6000), extended, double
 CHECKPOINT_EVERY=500
 
 # Evolution kernel: quench dynamics run kernel-free.
@@ -112,7 +113,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     BRANCH_START=$(date +%s)
     KBE_OUT=kbe_runs; DG_FLAGS=""
     if [ "$DELTA_G" = "1" ]; then
-        KBE_OUT=kbe_runs_dG; DG_FLAGS="--delta-g --dg-corr-tol $DG_CORR_TOL"; [ -n "$REF_EQ_FILE" ] && DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"
+        KBE_OUT=kbe_runs_dG; DG_FLAGS="--delta-g --dg-corr-tol $DG_CORR_TOL --dg-residual $DG_RESIDUAL"; [ -n "$REF_EQ_FILE" ] && DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"
     fi
     "$PYTHON" -u syk_batch_tools.py kbe-one \
         --J4-i          "$J4"            \
