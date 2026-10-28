@@ -2637,6 +2637,32 @@ def kernel_clipping_is_inactive(
     return bool(np.min(np.imag(K_R_w)) >= -1e-14 * np.max(np.abs(K_R_w)))
 
 
+def find_ref_eq_file(eq_dir: Path, J4: float, beta: float, omega_real: np.ndarray, *, allow_not_converged: bool = False) -> Path:
+    """delta-G reference: the lambda = mu = 0 equilibrium at this J4, beta on the same omega grid as the quenched eq file.
+    The preparation kernel is off at lambda = 0, so kernel_c and the cutoff do not matter; any such file on the grid will do."""
+    manifest = load_eq_manifest_tree(eq_dir)          # eq_dir and its immediate subfolders; filenames resolved per manifest
+    if manifest.empty:
+        raise FileNotFoundError(f"No equilibrium manifest in {eq_dir}.")
+    ok = {"ok", "not_converged"} if allow_not_converged else {"ok"}
+    rows = manifest[manifest["status"].isin(ok)
+                    & np.isclose(manifest["J2"].astype(float), 0.0)
+                    & np.isclose(manifest["J4"].astype(float), float(J4))
+                    & np.isclose(manifest["beta"].astype(float), float(beta))]
+    for col in ("mu", "kernel_lambda"):
+        if col in rows.columns:
+            rows = rows[np.isclose(rows[col].fillna(0.0).astype(float), 0.0)]
+    for fname in rows["filename"]:
+        path = Path(fname)
+        if not path.exists():
+            continue
+        with np.load(path, allow_pickle=False) as z:
+            if np.array_equal(z["omega_real"], omega_real):
+                return path
+    raise FileNotFoundError(
+        f"No lambda = mu = 0 equilibrium for J4={J4}, beta={beta} on this omega grid in {eq_dir}; run eq-one with "
+        "--kernel-lambda 0 --mu 0 on the same grid, or pass --ref-eq-file.")
+
+
 def find_eq_file(
     eq_manifest: pd.DataFrame,
     J4: float,
@@ -2930,7 +2956,8 @@ def run_kbe_one(
     }
     if delta_g:
         if ref_eq_file is None:
-            raise ValueError("--delta-g needs --ref-eq-file (the lambda = mu = 0 equilibrium at the same beta).")
+            ref_eq_file = find_ref_eq_file(Path(eq_dir), J4_i, beta, omega_real, allow_not_converged=eq_allow_not_converged)
+            print(f"delta-G reference (lambda = mu = 0): {ref_eq_file}")
         if J2_i != 0.0 or J2_f != 0.0 or J4_i != J4_f or kernel_lambda != 0.0:
             raise ValueError("delta-G mode needs J2 = 0, J4_i = J4_f and no evolution kernel.")
         with np.load(ref_eq_file, allow_pickle=False) as ref_data:
@@ -3287,7 +3314,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
     pkbe.add_argument("--delta-g", action="store_true", help="Evolve dG = G - G_ref around the lambda = mu = 0 equilibrium (--ref-eq-file) instead of G: same scheme, about 2.5-3 decades lower round-off floor. Output key dGgt_post (+ g0); file names get _dG. Needs J2 = 0, J4_i = J4_f, no evolution kernel.")
-    pkbe.add_argument("--ref-eq-file", default=None, help="lambda = mu = 0 eq npz at the same beta and on the same omega grid (delta-G reference).")
+    pkbe.add_argument("--ref-eq-file", default=None, help="lambda = mu = 0 eq npz at the same beta and on the same omega grid (delta-G reference). Default: looked up in --eq-dir.")
     pkbe.add_argument("--dg-corr-tol", type=float, default=1e-19, help="Corrector tolerance on the dG change (delta-G mode; Goff keeps --corr-tol).")
     pkbe.add_argument("--no-dg-stagnation", action="store_true", help="delta-G mode: do not stop the corrector when its change stops falling (arithmetic floor).")
     pkbe.add_argument("--dg-residual", choices=["auto", "extended", "double"], default="auto", help="delta-G mode: precision of the once-per-grid residual. double leaves a ~3-5e-19 per step drift in single runs (pairs unaffected); extended removes it but costs ~Nt^3 (auto: extended up to Nt = 6000).")

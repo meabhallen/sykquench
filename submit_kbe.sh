@@ -20,8 +20,8 @@ T_PRE_FACTOR=2.0
 T_POST_FACTOR=1.0
 CORR_TOL_FACTOR=1e-16           # corr_tol = CORR_TOL_FACTOR / BETA * DT / 20 * 12
 N_CORR=50
-DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref; needs REF_EQ_FILE, mu-independent lambda = mu = 0 eq at each beta)
-REF_EQ_FILE=""                  # e.g. $WORK_DIR/eq_runs/eq_J4_1_b_32_mu_0_lam_0_c_m0p5625_.../syk_eq_..._74d1bf7e.npz (one beta per submission)
+DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref; the lambda = mu = 0 reference eq is looked up automatically)
+REF_EQ_FILE=""                  # optional override; leave empty to look up the lambda = mu = 0 eq at each beta in eq_runs
 DG_CORR_TOL=1e-19
 CHECKPOINT_EVERY=200
 

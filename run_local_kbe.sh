@@ -37,7 +37,7 @@ T_POST_FACTOR=1.1               # time grid in units of beta taken up by pure no
 CORR_TOL=1e-16                  # flat corrector tolerance (the round-off floor); beta-scaled values ~1e-15 let per-step error accumulate
 N_CORR=20                       # max number of solver iterations per KBE step (unless precision reached already)
 DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref, lower round-off floor); output in $WORK_DIR/kbe_runs_dG
-REF_EQ_FILE=""                  # lambda = mu = 0 eq npz at the same beta (required when DELTA_G=1)
+REF_EQ_FILE=""                  # lambda = mu = 0 eq npz at the same beta (optional: default looks it up in eq_runs)
 DG_CORR_TOL=1e-19
 CHECKPOINT_EVERY=500
 
@@ -112,7 +112,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     BRANCH_START=$(date +%s)
     KBE_OUT=kbe_runs; DG_FLAGS=""
     if [ "$DELTA_G" = "1" ]; then
-        KBE_OUT=kbe_runs_dG; DG_FLAGS="--delta-g --ref-eq-file $REF_EQ_FILE --dg-corr-tol $DG_CORR_TOL"
+        KBE_OUT=kbe_runs_dG; DG_FLAGS="--delta-g --dg-corr-tol $DG_CORR_TOL"; [ -n "$REF_EQ_FILE" ] && DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"
     fi
     "$PYTHON" -u syk_batch_tools.py kbe-one \
         --J4-i          "$J4"            \

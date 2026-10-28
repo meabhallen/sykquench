@@ -41,14 +41,14 @@ CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)_muf_$(safe $MU_F)_eqmu_$(safe $EQ_MU)"
 OUT_DIR="kbe_runs/$TAG"
 
-# delta-G mode (opt-in): DELTA_G=1 with REF_EQ_FILE = the lambda = mu = 0 eq npz at the same beta. Output goes to kbe_runs_dG/
+# delta-G mode (opt-in): DELTA_G=1; the lambda = mu = 0 reference eq is looked up in eq_runs (or set REF_EQ_FILE). Output goes to kbe_runs_dG/
 # (key dGgt_post instead of Ggt_post), so the analysis index over kbe_runs/ never picks it up by mistake.
 DELTA_G=${DELTA_G:-0}
 DG_FLAGS=""
 if [ "$DELTA_G" = "1" ]; then
-    if [ -z "${REF_EQ_FILE:-}" ]; then echo "DELTA_G=1 needs REF_EQ_FILE" >&2; exit 1; fi
     OUT_DIR="kbe_runs_dG/${TAG}_dG"
-    DG_FLAGS="--delta-g --ref-eq-file $REF_EQ_FILE --dg-corr-tol ${DG_CORR_TOL:-1e-19}"
+    DG_FLAGS="--delta-g --dg-corr-tol ${DG_CORR_TOL:-1e-19}"
+    if [ -n "${REF_EQ_FILE:-}" ]; then DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"; fi
 fi
 
 KERNEL_CUTOFF_FLAG=""
