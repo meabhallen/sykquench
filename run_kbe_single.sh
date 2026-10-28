@@ -41,6 +41,16 @@ CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)_muf_$(safe $MU_F)_eqmu_$(safe $EQ_MU)"
 OUT_DIR="kbe_runs/$TAG"
 
+# delta-G mode (opt-in): DELTA_G=1 with REF_EQ_FILE = the lambda = mu = 0 eq npz at the same beta. Output goes to kbe_runs_dG/
+# (key dGgt_post instead of Ggt_post), so the analysis index over kbe_runs/ never picks it up by mistake.
+DELTA_G=${DELTA_G:-0}
+DG_FLAGS=""
+if [ "$DELTA_G" = "1" ]; then
+    if [ -z "${REF_EQ_FILE:-}" ]; then echo "DELTA_G=1 needs REF_EQ_FILE" >&2; exit 1; fi
+    OUT_DIR="kbe_runs_dG/${TAG}_dG"
+    DG_FLAGS="--delta-g --ref-eq-file $REF_EQ_FILE --dg-corr-tol ${DG_CORR_TOL:-1e-19}"
+fi
+
 KERNEL_CUTOFF_FLAG=""
 if [ -n "${KERNEL_CUTOFF:-}" ]; then
     KERNEL_CUTOFF_FLAG="--kernel-cutoff $KERNEL_CUTOFF"
@@ -124,7 +134,7 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --eq-mu         "$EQ_MU"          \
     --eq-dir        "$WORK_DIR/eq_runs"  \
     --out-dir       "$OUT_DIR"        \
-    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG $EQ_CLIP_FLAG &
+    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG $EQ_CLIP_FLAG $DG_FLAGS &
 
 PY_PID=$!
 wait "$PY_PID"

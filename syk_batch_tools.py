@@ -1737,6 +1737,380 @@ def evolve_syk4_kbe_massdef(
 
 
 # ============================================================
+# delta-G mode (opt-in, kbe-one --delta-g): the same scheme as evolve_syk4_kbe / evolve_syk4_kbe_massdef, evolving
+# dG = G - G_ref instead of G, with G_ref(t1, t2) = G_0(t1 - t2) the undeformed (lambda = mu = 0) equilibrium at the same
+# beta. Writing G = G_ref + dG turns the AM1 corrector exactly into
+#     dG[n, j] = dG[n-1, j] + dt/2 (dF[n, j] + dF[n-1, j]) + R[n, j],
+#     dF = F[G_ref + dG] - F[G_ref],   R = dt/2 (F_ref[n] + F_ref[n-1]) - (G_ref[n] - G_ref[n-1]).
+# dF is evaluated with the product rule (XY - X_r Y_r = (X_r + dX) dY + dX Y_r) and
+# dSigma = -J4^2 dG (3 G_r^2 + 3 G_r dG + dG^2), so no O(1) numbers are subtracted and the rounding is relative to |dG|
+# rather than |G| (about 2.5-3 decades lower floor). R is lambda- and mu-independent (the discrete residual of the
+# undeformed equilibrium, i.e. the source of the lambda^0 artefact), computed once per grid and cached; the increments in R
+# are np.diff of the stored reference g0, which makes the rewrite exact (a separately summed increment would not be).
+# Goff (mu > 0) is not rewritten: its reference value is 0, so it is already a deviation. It uses the full Sigma.
+# Requires J2 = 0, J4_i = J4_f and no evolution kernel.
+# ============================================================
+
+def _dg_spectral_greater(omega: np.ndarray, A: np.ndarray, beta: float, s: np.ndarray, chunk: int = 96) -> np.ndarray:
+    """sum_w -i (1 - nF(w)) A(w) e^{-i w s} dw / 2 pi on the array s (the Riemann sum of greater_from_spectral), vectorised."""
+    dw = omega[1] - omega[0]
+    nF = 1.0 / (np.exp(np.clip(beta * omega, -500, 500)) + 1.0)
+    c = -1j * (1.0 - nF) * A * dw / (2 * np.pi)
+    s = np.asarray(s, dtype=float)
+    out = np.empty(len(s), dtype=complex)
+    for a in range(0, len(s), chunk):
+        out[a:a + chunk] = np.exp(-1j * np.outer(s[a:a + chunk], omega)) @ c
+    return out
+
+
+def dg_reference(omega: np.ndarray, A0: np.ndarray, beta: float, Nt: int, dt: float) -> Tuple[np.ndarray, np.ndarray]:
+    """g0[k] = G_0(k dt) (g0[0] = -i/2, the KBE diagonal) and dg[k] = g0[k] - g0[k-1] (dg[0] = 0), from the reference A0."""
+    g0 = _dg_spectral_greater(omega, A0, beta, np.arange(Nt) * dt)
+    g0[0] = -0.5j
+    dg = np.concatenate([[0.0], np.diff(g0)])
+    return g0, dg
+
+
+def dg_ref_hash(omega: np.ndarray, A0: np.ndarray) -> str:
+    """Hash of the reference spectral function (independent of where the file lives)."""
+    return hashlib.sha1(np.ascontiguousarray(omega).tobytes() + np.ascontiguousarray(A0).tobytes()).hexdigest()[:12]
+
+
+def _dg_toeplitz(g: np.ndarray) -> np.ndarray:
+    """T[i, j] = g[i - j] (i >= j), -conj(g[j - i]) (i < j): the Majorana-symmetric Toeplitz matrix of a reference sequence."""
+    n = len(g)
+    T = np.empty((n, n), dtype=complex)
+    gc = -np.conj(g)
+    for i in range(n):                   # row by row: no n x n index arrays
+        T[i, :i + 1] = g[i::-1]
+        T[i, i + 1:] = gc[1:n - i]
+    return T
+
+
+def _dg_sigma(gr: np.ndarray, x: np.ndarray, JJ: float) -> Tuple[np.ndarray, np.ndarray]:
+    """(Sigma_ref, dSigma) on a slice: Sigma_ref = -JJ G_r^3, dSigma = -JJ dG (3 G_r^2 + 3 G_r dG + dG^2)."""
+    return -JJ * gr ** 3, -JJ * x * (3 * gr ** 2 + 3 * gr * x + x ** 2)
+
+
+def _dg_rhs_old(Gr, Mr, X, MW, n, dt, JJ):
+    """dF of rhs_t1 on row n-1 (j < n) and of rhs_t2 on column n-1 (i < n), plus the full Sigma on that row/column."""
+    i = n - 1
+    w = trap_weights(n, dt)
+    Grb, Mrb, Xb = Gr[:n, :n], Mr[:n, :n], X[:n, :n]
+    Sr_r, dS_r = _dg_sigma(Gr[i, :n], X[i, :n], JJ)
+    Sr_c, dS_c = _dg_sigma(Gr[:n, i], X[:n, i], JJ)
+    SRr, SRd = Sr_r + Sr_c, dS_r + dS_c
+    I1 = (w * (SRr + SRd)) @ Xb + (w * SRd) @ Grb
+    I2 = (Sr_r + dS_r) @ MW + dS_r @ Mrb
+    d1 = -1j * (I1 + I2)
+    SAd = -(dS_c + dS_r)
+    SAf = -(Sr_c + Sr_r) + SAd
+    J1 = -(dS_c @ Mrb) - ((Sr_c + dS_c) @ MW)
+    J2 = Grb @ (w * SAd) + Xb @ (w * SAf)
+    d2 = 1j * (J1 + J2)
+    return d1, d2, Sr_r + dS_r, Sr_c + dS_c
+
+
+def _dg_rhs_new(Gr, Mr, X, MW, n, dt, JJ):
+    """The same on row n (j < n) and column n (i < n) with the current row/column n of dG; Sigma slices have length n+1."""
+    w = trap_weights(n + 1, dt)
+    Grb, Mrb, Xb = Gr[:n, :n], Mr[:n, :n], X[:n, :n]
+    Sr_r, dS_r = _dg_sigma(Gr[n, :n + 1], X[n, :n + 1], JJ)
+    Sr_c, dS_c = _dg_sigma(Gr[:n + 1, n], X[:n + 1, n], JJ)
+    SRr, SRd = Sr_r + Sr_c, dS_r + dS_c
+    I1 = (w[:n] * (SRr[:n] + SRd[:n])) @ Xb + (w[:n] * SRd[:n]) @ Grb \
+        + w[n] * (SRr[n] * X[n, :n] + SRd[n] * (Gr[n, :n] + X[n, :n]))
+    I2 = (Sr_r[:n] + dS_r[:n]) @ MW + dS_r[:n] @ Mrb
+    d1 = -1j * (I1 + I2)
+    SAd = -(dS_c + dS_r)
+    SAf = -(Sr_c + Sr_r) + SAd
+    J1 = -(dS_c[:n] @ Mrb) - ((Sr_c[:n] + dS_c[:n]) @ MW)
+    J2 = Grb @ (w[:n] * SAd[:n]) + Xb @ (w[:n] * SAf[:n]) + w[n] * (Gr[:n, n] * SAd[n] + X[:n, n] * SAf[n])
+    d2 = 1j * (J1 + J2)
+    return d1, d2, Sr_r + dS_r, Sr_c + dS_c
+
+
+def _dg_off_rhs(Gr, X, Goff, MA, MR, Sf_r, Sf_c, mu, n, dt, new):
+    """dGoff_dt1 on row i and dGoff_dt2 on column i (i = n if new else n-1), as evolve_syk4_kbe_massdef, with the full
+    Sigma slices Sf_r = Sigma[i, :], Sf_c = Sigma[:, i] and G = G_ref + dG in the precession terms."""
+    Gob = Goff[:n, :n]
+    if new:
+        w = trap_weights(n + 1, dt)
+        SR = Sf_r + Sf_c
+        SA = -(Sf_c + Sf_r)
+        o1 = -1j * ((w[:n] * SR[:n]) @ Gob + (w[n] * SR[n]) * Goff[n, :n] + Sf_r[:n] @ MA) - mu[n] * (Gr[n, :n] + X[n, :n])
+        o2 = 1j * (Sf_c[:n] @ MR + Gob @ (w[:n] * SA[:n]) + Goff[:n, n] * (w[n] * SA[n])) + mu[n] * (Gr[:n, n] + X[:n, n])
+    else:
+        i = n - 1
+        w = trap_weights(n, dt)
+        SR = Sf_r + Sf_c
+        SA = -(Sf_c + Sf_r)
+        o1 = -1j * ((w * SR) @ Gob + Sf_r @ MA) - mu[i] * (Gr[i, :n] + X[i, :n])
+        o2 = 1j * (Sf_c @ MR + Gob @ (w * SA)) + mu[i] * (Gr[:n, i] + X[:n, i])
+    return o1, o2
+
+
+def _dg_weighted_triangle(Xb: np.ndarray, dt: float) -> np.ndarray:
+    """_trap_triangle(Xb, dt) with a single n x n allocation."""
+    M = np.add(Xb, Xb.T)
+    np.negative(M, out=M)
+    return _trap_upper(M, dt)
+
+
+DG_EXTENDED_RESIDUAL_MAX_NT = 6000
+
+
+def _ld_vecmat(x: np.ndarray, A: np.ndarray, chunk: int = 256) -> np.ndarray:
+    """x @ A accumulated in extended precision (np.clongdouble), A converted a block of rows at a time."""
+    out = np.zeros(A.shape[1], dtype=np.clongdouble)
+    for a in range(0, A.shape[0], chunk):
+        out += x[a:a + chunk] @ A[a:a + chunk].astype(np.clongdouble)
+    return out
+
+
+def dg_residual(Gr: np.ndarray, Mr: np.ndarray, dg: np.ndarray, n0: int, dt: float, JJ: float,
+                extended: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+    """Post-quench residual of the reference: R1p[n - n0 - 1, :n] = R[n, :n] (rows), R2p[n - n0 - 1, :n] = R[:n, n] (columns),
+    for n0 < n < Nt. One evaluation of F[G_ref] per row/column, no iteration.
+
+    R is added to dG every step and is nearly constant in n along t - t' at late times, so its rounding error accumulates
+    linearly: in double precision about 5e-19 per step, which is the late-time floor of a single delta-G run (it cancels
+    exactly in a +-lambda pair sharing one R). extended=True accumulates F_ref in np.clongdouble (80-bit on x86; plain double
+    on platforms where long double is double), which removes it."""
+    Nt = Gr.shape[0]
+    R1p = np.zeros((Nt - n0 - 1, Nt), dtype=complex)
+    R2p = np.zeros((Nt - n0 - 1, Nt), dtype=complex)
+    ld = np.clongdouble if extended else complex
+    dtl = np.longdouble(dt) if extended else dt
+    prev = None
+    for i in range(n0, Nt):
+        m = i + 1
+        w = trap_weights(m, dt).astype(np.longdouble if extended else float)
+        Sr_r, Sr_c = (-JJ * Gr[i, :m].astype(ld) ** 3), (-JJ * Gr[:m, i].astype(ld) ** 3)
+        if extended:
+            F1 = -1j * (_ld_vecmat(w * (Sr_r + Sr_c), Gr[:m, :m]) + _ld_vecmat(Sr_r, Mr[:m, :m]))
+            F2 = 1j * (-_ld_vecmat(Sr_c, Mr[:m, :m]) + _ld_vecmat(w * -(Sr_c + Sr_r), Gr[:m, :m].T))
+        else:
+            Grb, Mrb = Gr[:m, :m], Mr[:m, :m]
+            F1 = -1j * ((w * (Sr_r + Sr_c)) @ Grb + Sr_r @ Mrb)
+            F2 = 1j * (-(Sr_c @ Mrb) + Grb @ (w * -(Sr_c + Sr_r)))
+        if prev is not None:
+            n = i
+            k = n - np.arange(n)
+            R1p[n - n0 - 1, :n] = dtl / 2 * (F1[:n] + prev[0]) - dg[k]
+            R2p[n - n0 - 1, :n] = dtl / 2 * (F2[:n] + prev[1]) + np.conj(dg[k])
+        prev = (F1, F2)
+    return R1p, R2p
+
+
+def dg_pre_quench(omega, A, A0, beta, t, n0, t_pre, t_post, g0) -> np.ndarray:
+    """dG on the pre-quench block: the block evolve_syk4_kbe builds (cubic interpolation of greater_from_spectral on 4 Nt + 1
+    points) minus G_ref. The lambda/mu difference is interpolated from A - A0 directly (interpolation is linear in the data),
+    plus the one-time interpolation error of the reference block."""
+    Nt = len(t)
+    t_rel_max = t_pre + t_post
+    t_grid = np.linspace(-t_rel_max, t_rel_max, 4 * Nt + 1)
+    iu = np.triu_indices(n0 + 1, 1)
+    arg = t[iu[0]] - t[iu[1]]
+    diff = interp1d(t_grid, greater_from_spectral(omega, A - A0, beta, t_grid), kind="cubic", fill_value="extrapolate")(arg)
+    ierr = interp1d(t_grid, greater_from_spectral(omega, A0, beta, t_grid), kind="cubic", fill_value="extrapolate")(arg) \
+        + np.conj(g0[iu[1] - iu[0]])
+    X = np.zeros((Nt, Nt), dtype=complex)
+    vals = diff + ierr
+    X[iu] = vals
+    X[iu[1], iu[0]] = -np.conj(vals)
+    return X
+
+
+def _dg_enforce(X: np.ndarray, n: int) -> None:
+    """enforce_majorana_slice for dG (G_ref is exactly Majorana-symmetric, and dG(t, t) = 0)."""
+    r = 0.5 * (X[n, :n] - np.conj(X[:n, n]))
+    X[n, :n] = r
+    X[:n, n] = -np.conj(r)
+    X[n, n] = 0.0
+
+
+def evolve_syk4_kbe_dg(
+    omega: np.ndarray,
+    A: np.ndarray,
+    A0: np.ndarray,
+    beta_i: float,
+    J4: float,
+    t_pre: float,
+    t_post: float,
+    dt: float = 0.05,
+    n_corr: int = 50,
+    corr_tol: float = 1e-16,
+    dg_corr_tol: float = 1e-19,
+    dg_stagnation: bool = True,
+    progress_every: int = 200,
+    checkpoint_path: Optional[Path] = None,
+    checkpoint_every: int = 200,
+    residual_dir: Optional[Path] = None,
+    A_off: Optional[np.ndarray] = None,
+    mu_i: float = 0.0,
+    mu_f: float = 0.0,
+    residual_extended: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """delta-G evolution (see the section comment). A_off/mu_i/mu_f given: the mass-deformed system, with Goff evolved as in
+    evolve_syk4_kbe_massdef. Corrector: dG converged when its change < dg_corr_tol, Goff when its change < corr_tol; with
+    dg_stagnation, each also counts as converged once its change stops falling (at its arithmetic floor).
+    Returns dict(t, n0, dG, g0, Goff (or None), corr_final_err, corr_final_err_off, corr_iters_used, ref_hash)."""
+    massdef = A_off is not None
+    t, n0 = kbe_time_grid(t_pre, t_post, dt)
+    Nt = len(t)
+    JJ = float(J4) ** 2
+    ref_hash = dg_ref_hash(omega, A0)
+    g0, dg = dg_reference(omega, A0, beta_i, Nt, dt)
+    if residual_extended is None:      # auto: the extended pass costs ~Nt^3 (about 1.5 h at Nt = 5069, ~20 h at 12699)
+        residual_extended = Nt <= DG_EXTENDED_RESIDUAL_MAX_NT
+    Gr = _dg_toeplitz(g0)
+    Mr = _dg_weighted_triangle(Gr, dt)   # W o G_A,ref on the whole grid; its n x n block is _trap_triangle(Gr[:n, :n])
+
+    # residual: cached per (beta, dt, grid, J4, reference)
+    rkey = param_hash({"beta": float(beta_i), "dt": float(dt), "t_pre": float(t_pre), "t_post": float(t_post), "Nt": Nt,
+                       "n0": n0, "J4": float(J4), "ref_hash": ref_hash, "extended": bool(residual_extended)}, n=12)
+    rfile = None if residual_dir is None else Path(residual_dir) / f"dg_residual_{rkey}.npz"
+    if rfile is not None and rfile.exists():
+        with np.load(rfile, allow_pickle=False) as z:
+            R1p, R2p = np.array(z["R1p"]), np.array(z["R2p"])
+        print(f"delta-G residual loaded from {rfile}")
+    else:
+        R1p, R2p = dg_residual(Gr, Mr, dg, n0, dt, JJ, extended=residual_extended)
+        if rfile is not None:
+            rfile.parent.mkdir(parents=True, exist_ok=True)
+            atomic_savez_compressed(rfile, R1p=R1p, R2p=R2p)
+            print(f"delta-G residual saved to {rfile}")
+
+    mu_of_t = np.where(t < 0.0, mu_i, mu_f)
+    corr_final_err = np.full(Nt, np.nan, dtype=float)
+    corr_final_err_off = np.full(Nt, np.nan, dtype=float)
+    corr_iters_used = np.zeros(Nt, dtype=int)
+
+    def _fresh():
+        X0 = dg_pre_quench(omega, A, A0, beta_i, t, n0, t_pre, t_post, g0)
+        Go0 = None
+        if massdef:
+            t_rel_max = t_pre + t_post
+            t_grid = np.linspace(-t_rel_max, t_rel_max, 4 * Nt + 1)
+            Goff_eq = interp1d(t_grid, greater_off_from_spectral(omega, A_off, beta_i, t_grid), kind="cubic", fill_value="extrapolate")
+            Go0 = _init_Goff(Nt, n0, Goff_eq, t)
+        return X0, Go0
+
+    n_start = n0 + 1
+    if checkpoint_path is not None and Path(checkpoint_path).exists():
+        try:
+            with np.load(checkpoint_path, allow_pickle=False) as ckpt:
+                _check_kbe_checkpoint_grid(ckpt, t, n0, t_pre, t_post, dt)
+                if str(ckpt["ref_hash"]) != ref_hash:
+                    raise ValueError("checkpoint was written with a different reference")
+                X = np.array(ckpt["dG"], dtype=complex, copy=True)
+                Goff = np.array(ckpt["Goff"], dtype=complex, copy=True) if massdef else None
+                n_start = int(np.asarray(ckpt["n_done"]).item()) + 1
+                corr_final_err[:n_start] = ckpt["corr_final_err"][:n_start]
+                corr_final_err_off[:n_start] = ckpt["corr_final_err_off"][:n_start]
+                corr_iters_used[:n_start] = ckpt["corr_iters_used"][:n_start]
+            print(f"Resumed delta-G KBE from checkpoint at n={n_start - 1} / {Nt - 1}  (t={t[n_start - 1]:.3f})")
+        except Exception as e:
+            print(f"Warning: could not load KBE checkpoint ({e}), starting fresh.")
+            n_start = n0 + 1
+            X, Goff = _fresh()
+    else:
+        X, Goff = _fresh()
+
+    checkpoint_state: Dict[str, Any] = {"n_done": n_start - 1}
+
+    def _save_checkpoint(n_done: int) -> None:
+        if checkpoint_path is None:
+            return
+        extra = {"Goff": Goff} if massdef else {}
+        atomic_savez_compressed(checkpoint_path, dG=X, n_done=np.array(n_done), n0=np.array(n0), t=t,
+                                corr_final_err=corr_final_err, corr_final_err_off=corr_final_err_off,
+                                corr_iters_used=corr_iters_used, ref_hash=np.array(ref_hash), **extra)
+
+    def _checkpoint_then_exit(signum: int, _frame: Any) -> None:
+        signal_name = signal.Signals(signum).name
+        n_done = checkpoint_state["n_done"]
+        if checkpoint_path is not None and n_done >= n0:
+            _save_checkpoint(n_done)
+            print(f"\n[{signal_name}] delta-G KBE checkpoint saved at n={n_done}, t={t[n_done]:.3f}; exiting for requeue.", flush=True)
+        else:
+            print(f"\n[{signal_name}] No completed KBE step beyond the equilibrium point to checkpoint; exiting.", flush=True)
+        raise SystemExit(128 + signum)
+
+    def _converged(err, prev, tol, it):
+        return err < tol or (dg_stagnation and it >= 4 and err > 0.7 * prev)
+
+    with temporary_signal_handlers({signal.SIGUSR1: _checkpoint_then_exit, signal.SIGTERM: _checkpoint_then_exit}):
+        for n in range(n_start, Nt):
+            r1, r2 = R1p[n - n0 - 1, :n], R2p[n - n0 - 1, :n]
+            MW = _dg_weighted_triangle(X[:n, :n], dt)
+            d1o, d2o, Sfr_o, Sfc_o = _dg_rhs_old(Gr, Mr, X, MW, n, dt, JJ)
+            if massdef:
+                d1o = d1o + mu_of_t[n - 1] * Goff[n - 1, :n]
+                d2o = d2o - mu_of_t[n - 1] * np.conj(Goff[n - 1, :n])
+                MA, MR = _trap_off_triangles(Goff[:n, :n], dt)
+                o1o, o2o = _dg_off_rhs(Gr, X, Goff, MA, MR, Sfr_o, Sfc_o, mu_of_t, n, dt, new=False)
+
+            X[n, :n] = X[n - 1, :n] + dt * d1o + r1
+            X[:n, n] = X[:n, n - 1] + dt * d2o + r2
+            _dg_enforce(X, n)
+            if massdef:
+                Goff[n, :n] = Goff[n - 1, :n] + dt * o1o
+                Goff[:n, n] = Goff[:n, n - 1] + dt * o2o
+                Goff[n, n] = Goff[n - 1, n - 1] + dt * (o1o[-1] + o2o[-1])
+
+            err = err_off = np.inf
+            it_used = 0
+            done_dg = done_off = False
+            for it in range(1, n_corr + 1):
+                row_old, col_old = X[n, :n].copy(), X[:n, n].copy()
+                if massdef:
+                    rowoff_old, coloff_old = Goff[n, :n].copy(), Goff[:n, n].copy()
+                d1n, d2n, Sfr_n, Sfc_n = _dg_rhs_new(Gr, Mr, X, MW, n, dt, JJ)
+                if massdef:
+                    d1n = d1n + mu_of_t[n] * Goff[n, :n]
+                    d2n = d2n - mu_of_t[n] * np.conj(Goff[n, :n])
+                    o1n, o2n = _dg_off_rhs(Gr, X, Goff, MA, MR, Sfr_n, Sfc_n, mu_of_t, n, dt, new=True)
+
+                X[n, :n] = X[n - 1, :n] + 0.5 * dt * (d1o + d1n) + r1
+                X[:n, n] = X[:n, n - 1] + 0.5 * dt * (d2o + d2n) + r2
+                _dg_enforce(X, n)
+                err_prev, err = err, max(float(np.max(np.abs(X[n, :n] - row_old))), float(np.max(np.abs(X[:n, n] - col_old))))
+                if massdef:
+                    Goff[n, :n] = Goff[n - 1, :n] + 0.5 * dt * (o1o + o1n)
+                    Goff[:n, n] = Goff[:n, n - 1] + 0.5 * dt * (o2o + o2n)
+                    Goff[n, n] = Goff[n - 1, n - 1] + 0.5 * dt * (o1o[-1] + o2o[-1] + o1n[-1] + o2n[-1])
+                    erroff_prev, err_off = err_off, max(float(np.max(np.abs(Goff[n, :n] - rowoff_old))),
+                                                        float(np.max(np.abs(Goff[:n, n] - coloff_old))))
+                    done_off = done_off or _converged(err_off, erroff_prev, corr_tol, it)
+                else:
+                    err_off, done_off = 0.0, True
+                done_dg = done_dg or _converged(err, err_prev, dg_corr_tol, it)
+                it_used = it
+                if done_dg and done_off:
+                    break
+
+            corr_final_err[n] = err
+            corr_final_err_off[n] = err_off
+            corr_iters_used[n] = it_used
+            checkpoint_state["n_done"] = n
+            if progress_every and (n - n0) % progress_every == 0:
+                print(f"evolved to t = {t[n]:.3f}, dG corr err = {err:.3e}" + (f", Goff corr err = {err_off:.3e}" if massdef else "")
+                      + f", iters = {it_used}")
+            if checkpoint_path is not None and (n - n0) % checkpoint_every == 0:
+                _save_checkpoint(n)
+                print(f"  [KBE checkpoint saved at n={n}, t={t[n]:.3f}]")
+
+        if checkpoint_path is not None and Path(checkpoint_path).exists():
+            Path(checkpoint_path).unlink()
+            print("KBE checkpoint removed (run complete).")
+
+    return dict(t=t, n0=n0, dG=X, g0=g0, Goff=Goff, corr_final_err=corr_final_err, corr_final_err_off=corr_final_err_off,
+                corr_iters_used=corr_iters_used, ref_hash=ref_hash, residual_extended=residual_extended)
+
+
+# ============================================================
 # Equilibrium-KBE self-consistency residual (scalar, single Majorana)
 # ============================================================
 
@@ -2063,7 +2437,8 @@ def kbe_filename(out_dir: os.PathLike | str, meta: Dict[str, Any]) -> Path:
         f"_mu_{sf(meta.get('mu_i', 0.0))}_to_{sf(meta.get('mu_f', 0.0))}"
         f"_beta_{sf(meta['beta'])}_dt_{sf(meta['dt'])}"
         f"_tpre_{sf(meta['t_pre'])}_tpost_{sf(meta['t_post'])}"
-        f"_ncorr_{int(meta['n_corr'])}_ctol_{sf(meta['corr_tol'])}_{h}.npz"
+        f"_ncorr_{int(meta['n_corr'])}_ctol_{sf(meta['corr_tol'])}"
+        + ("_dG" if meta.get("delta_g") else "") + f"_{h}.npz"
     )
 
 
@@ -2424,6 +2799,13 @@ def run_kbe_one(
     eq_accept_clipped_if_inactive: bool = True,
     overwrite: bool = False,
     save_diagnostics: bool = True,
+    # delta-G mode (opt-in): evolve G - G_ref around the lambda = mu = 0 equilibrium in ref_eq_file (see evolve_syk4_kbe_dg)
+    delta_g: bool = False,
+    ref_eq_file: Optional[os.PathLike | str] = None,
+    dg_corr_tol: float = 1e-19,
+    dg_stagnation: bool = True,
+    dg_residual_dir: Optional[os.PathLike | str] = None,
+    dg_residual_extended: Optional[bool] = None,
 ) -> Optional[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2546,6 +2928,25 @@ def run_kbe_one(
         "save_format": "post_quench_rows_plus_eq_gf_massdef" if massdef else "post_quench_rows_plus_eq_gf",
         "full_Ggt_saved": False,
     }
+    if delta_g:
+        if ref_eq_file is None:
+            raise ValueError("--delta-g needs --ref-eq-file (the lambda = mu = 0 equilibrium at the same beta).")
+        if J2_i != 0.0 or J2_f != 0.0 or J4_i != J4_f or kernel_lambda != 0.0:
+            raise ValueError("delta-G mode needs J2 = 0, J4_i = J4_f and no evolution kernel.")
+        with np.load(ref_eq_file, allow_pickle=False) as ref_data:
+            omega_ref = np.array(ref_data["omega_real"], copy=True)
+            A_ref = np.array(ref_data["A"], copy=True)
+        if not np.array_equal(omega_ref, omega_real):
+            raise ValueError(f"reference eq file {ref_eq_file} is on a different omega grid from {eq_file}.")
+        meta.update({
+            "delta_g": True,
+            "ref_eq_source": str(ref_eq_file),
+            "ref_hash": dg_ref_hash(omega_ref, A_ref),
+            "dg_corr_tol": float(dg_corr_tol),
+            "dg_stagnation": bool(dg_stagnation),
+            "dg_residual": {None: "auto", True: "extended", False: "double"}[dg_residual_extended],
+            "save_format": "post_quench_dG_rows_plus_g0" + ("_massdef" if massdef else ""),
+        })
     filename = kbe_filename(out_dir, meta)
     if filename.exists() and not overwrite:
         print(f"Skipping existing KBE file: {filename}")
@@ -2560,6 +2961,49 @@ def run_kbe_one(
     print("============================================================")
 
     try:
+        if delta_g:
+            o = evolve_syk4_kbe_dg(
+                omega_real, A, A_ref, beta, J4=J4_i, t_pre=t_pre, t_post=t_post, dt=dt, n_corr=n_corr,
+                corr_tol=corr_tol, dg_corr_tol=dg_corr_tol, dg_stagnation=dg_stagnation, progress_every=checkpoint_every,
+                checkpoint_path=checkpoint_path, checkpoint_every=checkpoint_every,
+                residual_dir=Path(dg_residual_dir) if dg_residual_dir is not None else Path(ref_eq_file).parent / "dg_residual_cache",
+                A_off=A_off if massdef else None, mu_i=mu_i, mu_f=mu_f, residual_extended=dg_residual_extended,
+            )
+            n0 = o["n0"]
+            t_kbe = o["t"]
+            t_kbe[n0] = 0.0
+            payload = {
+                "t_kbe": t_kbe.copy(),
+                "t_row_post": t_kbe[n0:].copy(),
+                "t_col_all": t_kbe.copy(),
+                "dGgt_post": o["dG"][n0:, :].copy(),
+                "g0": o["g0"],
+                "t_eq": t_eq,
+                "Ggt_eq_t": Ggt_eq_t,
+                "omega_real": omega_real,
+                "A": A,
+                "n0": np.array(n0),
+                "metadata_json": json.dumps(meta),
+            }
+            if massdef:
+                payload.update(
+                    Goff_post=o["Goff"][n0:, :].copy(),
+                    Goff_eq_t=greater_off_from_spectral(omega_real, A_off, beta, t_eq),
+                    A_off=A_off,
+                )
+            if save_diagnostics:
+                payload.update(
+                    corr_final_err_post=o["corr_final_err"][n0:],
+                    corr_iters_used_post=o["corr_iters_used"][n0:],
+                )
+                if massdef:
+                    payload.update(corr_final_err_off_post=o["corr_final_err_off"][n0:])
+            atomic_savez_compressed(filename, **payload)
+            row = dict(meta)
+            row.update({"filename": str(filename), "status": "ok"})
+            update_manifest(manifest_path, row)
+            print("Saved:", filename)
+            return filename
         if not massdef:
             t_kbe, Ggt, diagnostics = evolve_syk4_kbe(
                 omega_real,
@@ -2842,6 +3286,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--eq-unclipped-only", action="store_true", help="Only accept unclipped eq files. By default an unclipped file is preferred, but a clipped one is accepted when clipping is inactive for the eq kernel (Im K^R >= 0 everywhere, e.g. kernel_lambda <= 0 for kernel_c < 0, or kernel_lambda = 0), since the solutions are then identical.")
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
+    pkbe.add_argument("--delta-g", action="store_true", help="Evolve dG = G - G_ref around the lambda = mu = 0 equilibrium (--ref-eq-file) instead of G: same scheme, about 2.5-3 decades lower round-off floor. Output key dGgt_post (+ g0); file names get _dG. Needs J2 = 0, J4_i = J4_f, no evolution kernel.")
+    pkbe.add_argument("--ref-eq-file", default=None, help="lambda = mu = 0 eq npz at the same beta and on the same omega grid (delta-G reference).")
+    pkbe.add_argument("--dg-corr-tol", type=float, default=1e-19, help="Corrector tolerance on the dG change (delta-G mode; Goff keeps --corr-tol).")
+    pkbe.add_argument("--no-dg-stagnation", action="store_true", help="delta-G mode: do not stop the corrector when its change stops falling (arithmetic floor).")
+    pkbe.add_argument("--dg-residual", choices=["auto", "extended", "double"], default="auto", help="delta-G mode: precision of the once-per-grid residual. double leaves a ~3-5e-19 per step drift in single runs (pairs unaffected); extended removes it but costs ~Nt^3 (auto: extended up to Nt = 6000).")
+    pkbe.add_argument("--dg-residual-dir", default=None, help="Cache directory for the delta-G residual (default: dg_residual_cache next to the reference eq file).")
 
     pgrid = sub.add_parser("grid", help="Run eq-grid or kbe-grid from a JSON config file.")
     pgrid.add_argument("--kind", choices=["eq", "kbe"], required=True)
@@ -2909,6 +3359,12 @@ def main(argv: Optional[List[str]] = None) -> None:
             eq_accept_clipped_if_inactive=not args.eq_unclipped_only,
             overwrite=args.overwrite,
             save_diagnostics=not args.no_diagnostics,
+            delta_g=args.delta_g,
+            ref_eq_file=args.ref_eq_file,
+            dg_corr_tol=args.dg_corr_tol,
+            dg_stagnation=not args.no_dg_stagnation,
+            dg_residual_dir=args.dg_residual_dir,
+            dg_residual_extended={"auto": None, "extended": True, "double": False}[args.dg_residual],
         )
     elif args.cmd == "grid":
         with open(args.config) as f:

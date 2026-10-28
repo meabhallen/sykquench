@@ -36,6 +36,9 @@ T_PRE_FACTOR=2.0                # time grid in units of beta allocated to equili
 T_POST_FACTOR=1.1               # time grid in units of beta taken up by pure nonequilibrium dynamics
 CORR_TOL=1e-16                  # flat corrector tolerance (the round-off floor); beta-scaled values ~1e-15 let per-step error accumulate
 N_CORR=20                       # max number of solver iterations per KBE step (unless precision reached already)
+DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref, lower round-off floor); output in $WORK_DIR/kbe_runs_dG
+REF_EQ_FILE=""                  # lambda = mu = 0 eq npz at the same beta (required when DELTA_G=1)
+DG_CORR_TOL=1e-19
 CHECKPOINT_EVERY=500
 
 # Evolution kernel: quench dynamics run kernel-free.
@@ -107,6 +110,10 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
     echo "============================================================"
 
     BRANCH_START=$(date +%s)
+    KBE_OUT=kbe_runs; DG_FLAGS=""
+    if [ "$DELTA_G" = "1" ]; then
+        KBE_OUT=kbe_runs_dG; DG_FLAGS="--delta-g --ref-eq-file $REF_EQ_FILE --dg-corr-tol $DG_CORR_TOL"
+    fi
     "$PYTHON" -u syk_batch_tools.py kbe-one \
         --J4-i          "$J4"            \
         --J4-f          "$J4"            \
@@ -126,7 +133,7 @@ for EQ_KERNEL_LAMBDA in "$EQ_KERNEL_LAMBDA_MAG" "-$EQ_KERNEL_LAMBDA_MAG"; do
         --eq-kernel-c   "$EQ_KERNEL_C"   \
         --eq-kernel-cutoff "$EQ_KERNEL_CUTOFF" \
         --eq-dir        "$WORK_DIR/eq_runs" \
-        --out-dir       "$WORK_DIR/kbe_runs"
+        --out-dir       "$WORK_DIR/$KBE_OUT" $DG_FLAGS
 
     BRANCH_ELAPSED=$(( $(date +%s) - BRANCH_START ))
     #printf "  [branch elapsed: %02d:%02d:%02d]\n" $((BRANCH_ELAPSED/3600)) $((BRANCH_ELAPSED/60%60)) $((BRANCH_ELAPSED%60))

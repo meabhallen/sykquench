@@ -20,6 +20,9 @@ T_PRE_FACTOR=2.0
 T_POST_FACTOR=1.0
 CORR_TOL_FACTOR=1e-16           # corr_tol = CORR_TOL_FACTOR / BETA * DT / 20 * 12
 N_CORR=50
+DELTA_G=0                       # 1 = delta-G mode (evolve G - G_ref; needs REF_EQ_FILE, mu-independent lambda = mu = 0 eq at each beta)
+REF_EQ_FILE=""                  # e.g. $WORK_DIR/eq_runs/eq_J4_1_b_32_mu_0_lam_0_c_m0p5625_.../syk_eq_..._74d1bf7e.npz (one beta per submission)
+DG_CORR_TOL=1e-19
 CHECKPOINT_EVERY=200
 
 # Evolution kernel: the kernel actually applied during the real-time KBE
@@ -89,8 +92,8 @@ read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
     echo "Submitting: J4_i=$J4_I J4_f=$J4_F beta=$BETA mu_f=$MU_F eq_mu=$EQ_MU kernel_lambda=$KERNEL_LAMBDA kernel_c=$KERNEL_C kernel_cutoff=$KERNEL_CUTOFF eq_kernel_lambda=$EQ_KERNEL_LAMBDA eq_kernel_c=$EQ_KERNEL_C eq_kernel_cutoff=$EQ_KERNEL_CUTOFF corr_tol=$CORR_TOL"
 
     sbatch \
-        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}" \
-        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED,EQ_CLIP_MODE=$EQ_CLIP_MODE \
+        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}$( [ "$DELTA_G" = "1" ] && echo "_dG" )" \
+        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED,EQ_CLIP_MODE=$EQ_CLIP_MODE,DELTA_G=$DELTA_G,REF_EQ_FILE=$REF_EQ_FILE,DG_CORR_TOL=$DG_CORR_TOL \
         "$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))
