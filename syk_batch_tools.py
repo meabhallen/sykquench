@@ -33,6 +33,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
+from scipy.signal import ZoomFFT, fftconvolve
 
 # np.trapezoid was added in NumPy 2.0 (np.trapz's replacement); older
 # clusters still ship pre-2.0 NumPy where only np.trapz exists.
@@ -217,12 +218,87 @@ def grid_trapz_weights(x: np.ndarray) -> np.ndarray:
     return trap_weights(len(x), float(x[1] - x[0]))
 
 
+
+class UniformFourierPlan:
+    """Reusable O((Nt+Nw) log(Nt+Nw)) transforms for uniform t/omega grids.
+
+    The direct quadrature kernels in ``time_to_omega`` and ``omega_to_time``
+    are dense Fourier/Vandermonde matrices.  For uniform grids they can be
+    applied exactly (up to floating-point roundoff) with Bluestein's
+    chirp-z algorithm, implemented by SciPy's ZoomFFT, without materialising
+    the Nt x Nw phase matrix.
+
+    Endpoint trapezoidal weights and the 1/(2*pi) convention stay in the
+    caller, so this object only applies the oscillatory exponential.
+    """
+
+    def __init__(self, t: np.ndarray, omega: np.ndarray):
+        self.t = np.asarray(t, dtype=float)
+        self.omega = np.asarray(omega, dtype=float)
+        if self.t.ndim != 1 or self.omega.ndim != 1:
+            raise ValueError("t and omega must be one-dimensional.")
+        if self.t.size < 2 or self.omega.size < 2:
+            raise ValueError("t and omega must contain at least two points.")
+
+        self.dt = float(self.t[1] - self.t[0])
+        self.dw = float(self.omega[1] - self.omega[0])
+        if self.dt <= 0.0 or self.dw <= 0.0:
+            raise ValueError("t and omega grids must be increasing.")
+
+        # Tight enough to reject genuinely nonuniform grids while tolerating
+        # normal floating-point construction noise from linspace/arange.
+        t_tol = max(1e-13, 1e-10 * abs(self.dt))
+        w_tol = max(1e-13, 1e-10 * abs(self.dw))
+        if not np.allclose(np.diff(self.t), self.dt, rtol=1e-10, atol=t_tol):
+            raise ValueError("t grid is not uniform.")
+        if not np.allclose(np.diff(self.omega), self.dw, rtol=1e-10, atol=w_tol):
+            raise ValueError("omega grid is not uniform.")
+
+        # ZoomFFT uses sum_n x[n] exp(-i q n*spacing).  The t->omega transform
+        # needs the opposite sign, handled by conjugating input/output.
+        self._t2w = ZoomFFT(
+            self.t.size,
+            [self.omega[0], self.omega[-1]],
+            m=self.omega.size,
+            fs=2.0 * np.pi / self.dt,
+            endpoint=True,
+        )
+        # Here the input index runs along omega with spacing dw and the output
+        # "frequency" is t, so ZoomFFT already has the required negative sign.
+        self._w2t = ZoomFFT(
+            self.omega.size,
+            [self.t[0], self.t[-1]],
+            m=self.t.size,
+            fs=2.0 * np.pi / self.dw,
+            endpoint=True,
+        )
+        self._t2w_shift = np.exp(1j * self.omega * self.t[0])
+        self._w2t_shift = np.exp(-1j * self.omega[0] * self.t)
+
+    def time_to_omega_weighted(self, x_weighted: np.ndarray) -> np.ndarray:
+        x_weighted = np.asarray(x_weighted)
+        if x_weighted.shape != (self.t.size,):
+            raise ValueError(
+                f"Expected t-grid vector of shape {(self.t.size,)}, got {x_weighted.shape}."
+            )
+        return self._t2w_shift * np.conj(self._t2w(np.conj(x_weighted)))
+
+    def omega_to_time_weighted(self, X_weighted: np.ndarray) -> np.ndarray:
+        X_weighted = np.asarray(X_weighted)
+        if X_weighted.shape != (self.omega.size,):
+            raise ValueError(
+                f"Expected omega-grid vector of shape {(self.omega.size,)}, got {X_weighted.shape}."
+            )
+        return self._w2t_shift * self._w2t(X_weighted)
+
+
 def omega_to_time(
     X_w: np.ndarray,
     omega: np.ndarray,
     t: np.ndarray,
     chunk: int = 512,
     phase: Optional[np.ndarray] = None,
+    plan: Optional[UniformFourierPlan] = None,
 ) -> np.ndarray:
     """x(t) = int dω/(2π) exp(-iωt) X(ω).
 
@@ -238,8 +314,17 @@ def omega_to_time(
     X_w = np.asarray(X_w)
     w_omega = grid_trapz_weights(omega) / (2 * np.pi)
     X_weighted = X_w * w_omega
+    if phase is not None and plan is not None:
+        raise ValueError("Pass either phase or plan, not both.")
     if phase is not None:
         return phase @ X_weighted
+    if plan is None:
+        try:
+            plan = UniformFourierPlan(t, omega)
+        except ValueError:
+            plan = None
+    if plan is not None:
+        return plan.omega_to_time_weighted(X_weighted)
     out = np.empty(len(t), dtype=complex)
     for a in range(0, len(t), chunk):
         tt = t[a : a + chunk]
@@ -254,6 +339,7 @@ def time_to_omega(
     omega: np.ndarray,
     chunk: int = 512,
     phase: Optional[np.ndarray] = None,
+    plan: Optional[UniformFourierPlan] = None,
 ) -> np.ndarray:
     """X(ω) = int dt exp(+iωt) x(t).
 
@@ -266,8 +352,17 @@ def time_to_omega(
     x_t = np.asarray(x_t)
     w_t = grid_trapz_weights(t)
     x_weighted = x_t * w_t
+    if phase is not None and plan is not None:
+        raise ValueError("Pass either phase or plan, not both.")
     if phase is not None:
         return phase @ x_weighted
+    if plan is None:
+        try:
+            plan = UniformFourierPlan(t, omega)
+        except ValueError:
+            plan = None
+    if plan is not None:
+        return plan.time_to_omega_weighted(x_weighted)
     out = np.empty(len(omega), dtype=complex)
     for a in range(0, len(omega), chunk):
         ww = omega[a : a + chunk]
@@ -637,20 +732,15 @@ def solve_equilibrium_greater_real_time(
         theta[t_grid > 0] = 1.0
         theta[i0]           = 0.5
 
-        # t_grid/omega_real are fixed for the whole loop below, so the DFT
-        # phase matrices used by time_to_omega/omega_to_time each iteration
-        # can be built once here instead of rebuilt (via expensive exp()
-        # calls) on every one of up to max_iter calls. Skipped for grids
-        # where caching both dense (Nt, Nw) matrices would use too much
-        # memory; see precompute_time_omega_phase.
-        phase_t2w, phase_w2t = precompute_time_omega_phase(t_grid, omega_real)
-        if phase_t2w is None:
-            phase_bytes = 2 * len(t_grid) * len(omega_real) * np.dtype(complex).itemsize
-            print(
-                f"Nt={len(t_grid)}, Nw={len(omega_real)} grid too large to cache "
-                f"the DFT phase matrix ({phase_bytes / 1024**3:.1f} GB); "
-                "recomputing it each iteration instead (slower, bounded memory)."
-            )
+        # Both grids are uniform, so the dense Nt x Nw Fourier phase matrix
+        # is unnecessary.  Reuse two lightweight Bluestein/ZoomFFT plans
+        # instead: O((Nt+Nw) log(Nt+Nw)) work and O(Nt+Nw) memory per transform.
+        ft_plan = UniformFourierPlan(t_grid, omega_real)
+        dense_phase_bytes = 2 * len(t_grid) * len(omega_real) * np.dtype(complex).itemsize
+        print(
+            f"Nt={len(t_grid)}, Nw={len(omega_real)}: using reusable ZoomFFT plans "
+            f"instead of the {dense_phase_bytes / 1024**3:.1f} GB dense phase cache."
+        )
 
         print("\nReal-time equilibrium self-consistency")
         print(f"J2={J2}, J4={J4}, beta={beta}, mu={mu}")
@@ -679,7 +769,7 @@ def solve_equilibrium_greater_real_time(
         for it in range(it_start, max_iter):
             iSigma_gt_t = J2**2 * F_t + J4**2 * F_t**3
             iSigma_R_t  = theta * (iSigma_gt_t + iSigma_gt_t[::-1])
-            iSigma_R_w    = time_to_omega(iSigma_R_t, t_grid, omega_real, phase=phase_t2w)
+            iSigma_R_w    = time_to_omega(iSigma_R_t, t_grid, omega_real, plan=ft_plan)
             Sigma_R_w     = iSigma_R_w / (1j)
             a_w           = omega_real + 1j * eta_ret + K_R_w - Sigma_R_w
             GR_w          = a_w / (a_w**2 - mu**2)  # reduces to 1/a_w at mu=0
@@ -697,7 +787,7 @@ def solve_equilibrium_greater_real_time(
                 sum_A = _trapz(A_new, omega_real) / (2 * np.pi)
 
             F_w_new   = (1.0 - nF) * A_new
-            F_t_new = omega_to_time(F_w_new, omega_real, t_grid, phase=phase_w2t)
+            F_t_new = omega_to_time(F_w_new, omega_real, t_grid, plan=ft_plan)
             delta_F   = np.mean(np.abs(F_t_new - F_t))
             F_t     = (1.0 - mixing) * F_t + mixing * F_t_new
             A         = A_new
@@ -738,7 +828,7 @@ def solve_equilibrium_greater_real_time(
                     GRoff_w_current = -1j * mu / (a_w**2 - mu**2)
                     A_off_current = 2.0 * np.real(GRoff_w_current)
                     Ggt_off_current = omega_to_time(
-                        (1.0 - nF) * A_off_current, omega_real, t_grid, phase=phase_w2t
+                        (1.0 - nF) * A_off_current, omega_real, t_grid, plan=ft_plan
                     )
                     dab_diag, dab_off = calc_kbe_d_ab_syk_equilibrium_massdef(
                         t=t_grid,
@@ -821,7 +911,7 @@ def solve_equilibrium_greater_real_time(
             )
 
         F_w     = (1.0 - nF) * A
-        F_t   = omega_to_time(F_w, omega_real, t_grid)
+        F_t   = omega_to_time(F_w, omega_real, t_grid, plan=ft_plan)
         Ggt_t = -1j * F_t
 
         # Off-diagonal companion (mu=0 -> identically zero): pure post-processing,
@@ -830,7 +920,7 @@ def solve_equilibrium_greater_real_time(
         GRoff_w = -1j * mu / (a_w**2 - mu**2)
         A_off = 2.0 * np.real(GRoff_w)
         Ggt_off_w = (1.0 - nF) * A_off
-        Ggt_off_t = omega_to_time(Ggt_off_w, omega_real, t_grid)
+        Ggt_off_t = omega_to_time(Ggt_off_w, omega_real, t_grid, plan=ft_plan)
 
         print("\nFinal checks:")
         print("  F(0) = iG>(0) =", F_t[i0])
@@ -1675,9 +1765,14 @@ def _central_derivative_1d(X: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 
 def _conv_1d_same(A: np.ndarray, B: np.ndarray, t: np.ndarray) -> np.ndarray:
-    """C(t) = int du A(t-u) B(u), for scalar arrays on a symmetric uniform grid."""
+    """C(t) = int du A(t-u) B(u), on a symmetric uniform grid.
+
+    FFT convolution is mathematically the same discrete convolution as
+    np.convolve here (up to floating-point roundoff), but changes the cost
+    from O(Nt^2) to O(Nt log Nt), which matters for the large equilibrium grids.
+    """
     w = grid_trapz_weights(t)
-    return np.convolve(np.asarray(B) * w, np.asarray(A), mode="same")
+    return fftconvolve(np.asarray(B) * w, np.asarray(A), mode="same")
 
 
 def _kernel_greater_t(
