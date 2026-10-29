@@ -1276,12 +1276,12 @@ def fill_equilibrium_block(t, n0, t_eq, Ggt_eq):
     interps = [[interp1d(t_eq, Ggt_eq[:, a, b], kind="cubic",
                          bounds_error=False, fill_value="extrapolate")
                 for b in range(2)] for a in range(2)]
-    for i in range(n0 + 1):
-        for j in range(n0 + 1):
-            tau = t[i] - t[j]
-            for a in range(2):
-                for b in range(2):
-                    G[i, j, a, b] = interps[a][b](tau)
+    # One vectorised spline evaluation per component on the whole pre-quench block (same tau values as the old
+    # per-element loop, so the same result).
+    tau = np.subtract.outer(t[:n0 + 1], t[:n0 + 1])
+    for a in range(2):
+        for b in range(2):
+            G[:n0 + 1, :n0 + 1, a, b] = interps[a][b](tau)
     for n in range(n0 + 1):
         enforce_equal_time_majorana(G, n)
     return G
@@ -2282,6 +2282,162 @@ def solve_equilibrium_kktz_matrix_F_checkpointed(
     return omega, t, Ggt, GR_w, F_t
 
 
+# ── Vectorised KBE memory sums ────────────────────────────────────────────────
+# Same discretisation as rhs_t1_matrix / rhs_t2_matrix called per element (which are kept for reference): the memory
+# sums for a whole row/column of 2x2 blocks are matrix-vector products on (n, 4n) views of the n x n block, and
+# Sigma^> is recomputed only on row/column n (the only entries of G that change during step n).
+
+def _kktz_cubic_polynomial_pairs(X, a, a2):
+    """_kktz_cubic_polynomial(X, alpha) with the alpha coefficients a, a2 given explicitly (one per leading entry)."""
+    g11 = X[..., 0, 0]
+    g12 = X[..., 0, 1]
+    g21 = X[..., 1, 0]
+    g22 = X[..., 1, 1]
+
+    P = np.empty_like(X, dtype=np.result_type(X, complex))
+    P[..., 0, 0] = (
+        g11**3
+        + 3.0 * a * g11 * (g12**2 + g21**2)
+        + 3.0 * a2 * g11 * g22**2
+        + 6.0 * a2 * g22 * g12 * g21
+    )
+    P[..., 1, 1] = (
+        g22**3
+        + 3.0 * a * g22 * (g12**2 + g21**2)
+        + 3.0 * a2 * g22 * g11**2
+        + 6.0 * a2 * g11 * g12 * g21
+    )
+    P[..., 0, 1] = (
+        g12**3
+        + 3.0 * a * g12 * (g11**2 + g22**2)
+        + 3.0 * a2 * g12 * g21**2
+        + 6.0 * a2 * g11 * g22 * g21
+    )
+    P[..., 1, 0] = (
+        g21**3
+        + 3.0 * a * g21 * (g11**2 + g22**2)
+        + 3.0 * a2 * g21 * g12**2
+        + 6.0 * a2 * g11 * g22 * g12
+    )
+    return P
+
+
+def _sigma_greater_kktz_pairs(G_pairs, J1, J2, alpha1, alpha2, keep_cross_self_energy=True):
+    """sigma_greater_kktz on a list of (t1, t2) pairs: G_pairs (m, 2, 2), J1/J2/alpha1/alpha2 the couplings at t1/t2.
+
+    The same elementwise arithmetic as the full two-time call (J(t1)J(t2), (alpha(t1)+alpha(t2))/2, alpha(t1)alpha(t2),
+    and a contiguous (m, 2, 2) operand like the full array's), so each entry is bitwise identical to it.
+    """
+    X = np.ascontiguousarray(G_pairs)
+    jj = J1 * J2
+    a = 0.5 * (alpha1 + alpha2)
+    a2 = alpha1 * alpha2
+    out = -_kktz_cubic_polynomial_pairs(X, a, a2)
+    if not keep_cross_self_energy:
+        out[..., 0, 1] = 0.0
+        out[..., 1, 0] = 0.0
+    return jj[..., None, None] * out
+
+
+def _sigma_update_slice_kktz(S, G, J_of_t, alpha_of_t, n, keep_cross_self_energy=True):
+    """Recompute S = sigma_greater_kktz(G, J_of_t, alpha_of_t) on row n (S[n, :n+1]) and column n (S[:n, n]) only."""
+    S[n, :n + 1] = _sigma_greater_kktz_pairs(
+        G[n, :n + 1], J_of_t[n], J_of_t[:n + 1], alpha_of_t[n], alpha_of_t[:n + 1],
+        keep_cross_self_energy=keep_cross_self_energy,
+    )
+    S[:n, n] = _sigma_greater_kktz_pairs(
+        G[:n, n], J_of_t[:n], J_of_t[n], alpha_of_t[:n], alpha_of_t[n],
+        keep_cross_self_energy=keep_cross_self_energy,
+    )
+
+
+def _kbe_mt_set_column(MT, G, j, dt):
+    """MT[k, j] = w_k * advanced_mat(G, k, j) for k <= j, w = _trap_weights_segment(j + 1, dt); MT[k, j] stays 0 for k > j.
+
+    MT holds the trapezoid-weighted triangle of the advanced G used by the second memory sum of rhs_t1_matrix, and
+    (as -MT[k, i].T = w_k retarded_mat(G, i, k)) by the first memory sum of rhs_t2_matrix. Column j only depends on
+    G[:j+1, j] and G[j, :j+1], which are final once step j is done, so MT is filled one column per step.
+    """
+    w = _trap_weights_segment(j + 1, dt)[:, None, None]
+    MT[:j + 1, j] = w * (-np.swapaxes(G[j, :j + 1], -1, -2) - G[:j + 1, j])
+
+
+def _kbe_row_contract(X, B, n):
+    """R[j] = sum_{k<n} X[k] @ B[k, j] for j < n; X is (n, 2, 2), B is (Nt, Nt, 2, 2) (only B[:n, :n] is read)."""
+    V = B[:n, :n].reshape(n, 4 * n)                                        # [k, (j b' c)], a view
+    Z = (X.transpose(1, 2, 0).reshape(4, n) @ V).reshape(2, 2, n, 2, 2)  # [a, b, j, b', c]
+    return (Z[:, 0, :, 0, :] + Z[:, 1, :, 1, :]).transpose(1, 0, 2)
+
+
+def _kbe_col_contract_G(G, Y, n):
+    """R[i] = sum_{k<n} G[i, k] @ Y[k] for i < n; Y is (n, 2, 2)."""
+    V = G[:n, :n].reshape(n, 4 * n)                 # [i, (k a b)], a view
+    Yf = np.zeros((n, 2, 2, 2, 2), dtype=complex)   # [k, a', b, a, c] = delta(a', a) Y[k, b, c]
+    Yf[:, 0, :, 0, :] = Y
+    Yf[:, 1, :, 1, :] = Y
+    return (V @ Yf.reshape(4 * n, 4)).reshape(n, 2, 2)
+
+
+def _kbe_col_contract_MT(MT, Y, n):
+    """R[i] = sum_{k<n} (-MT[k, i].T) @ Y[k] for i < n; Y is (n, 2, 2)."""
+    V = MT[:n, :n].reshape(n, 4 * n)                                # [k, (i b a)], a view
+    W = (V.T @ Y.reshape(n, 4)).reshape(n, 2, 2, 2, 2)              # [i, b, a, b', c]
+    return -(W[:, 0, :, 0, :] + W[:, 1, :, 1, :])
+
+
+def _kbe_rhs_row_col_old(G, S, MT, h_list, n, dt):
+    """rhs_t1_matrix(G, S, h_list, n-1, j, dt) for j < n and rhs_t2_matrix(G, S, h_list, i, n-1, dt) for i < n, as
+    (n, 2, 2) arrays. Entry n-1 of each is the diagonal rhs_t1/rhs_t2(n-1, n-1). Needs MT columns 0..n-1."""
+    i = n - 1
+    w = _trap_weights_segment(n, dt)[:, None, None]
+    S_row = S[i, :n]
+    S_col = S[:n, i]
+    SR = S_row + np.swapaxes(S_col, -1, -2)      # retarded_sigma_mat(S, i, k)
+    SA = -np.swapaxes(S_row, -1, -2) - S_col     # advanced_sigma_mat(S, k, i)
+    d1 = -1j * (h_list[i] @ G[i, :n] + _kbe_row_contract(w * SR, G, n) + _kbe_row_contract(S_row, MT, n))
+    d2 = 1j * (G[:n, i] @ h_list[i] + _kbe_col_contract_MT(MT, S_col, n) + _kbe_col_contract_G(G, w * SA, n))
+    return d1, d2
+
+
+def _kbe_rhs_row_col_new(G, S, MT, h_list, n, dt):
+    """rhs_t1_matrix(G, S, h_list, n, j, dt) for j < n and rhs_t2_matrix(G, S, h_list, i, n, dt) for i < n, as
+    (n, 2, 2) arrays, with the current row/column n of G and S. Needs MT columns 0..n-1."""
+    w = _trap_weights_segment(n + 1, dt)[:, None, None]
+    S_row = S[n, :n + 1]
+    S_col = S[:n + 1, n]
+    wSR = w * (S_row + np.swapaxes(S_col, -1, -2))     # w_k retarded_sigma_mat(S, n, k), k <= n
+    wSA = w * (-np.swapaxes(S_row, -1, -2) - S_col)    # w_k advanced_sigma_mat(S, k, n), k <= n
+    G_row = G[n, :n]
+    G_col = G[:n, n]
+    d1 = -1j * (
+        h_list[n] @ G_row
+        + _kbe_row_contract(wSR[:n], G, n) + wSR[n] @ G_row
+        + _kbe_row_contract(S_row[:n], MT, n)
+    )
+    d2 = 1j * (
+        G_col @ h_list[n]
+        + _kbe_col_contract_MT(MT, S_col[:n], n)
+        + _kbe_col_contract_G(G, wSA[:n], n) + G_col @ wSA[n]
+    )
+    return d1, d2
+
+
+def _kbe_rhs_diag_new(G, S, h_list, n, dt):
+    """rhs_t1_matrix(G, S, h_list, n, n, dt) + rhs_t2_matrix(G, S, h_list, n, n, dt), vectorised over k."""
+    w = _trap_weights_segment(n + 1, dt)[:, None, None]
+    S_row = S[n, :n + 1]
+    S_col = S[:n + 1, n]
+    G_row = G[n, :n + 1]
+    G_col = G[:n + 1, n]
+    SR = S_row + np.swapaxes(S_col, -1, -2)      # retarded_sigma_mat(S, n, k)
+    SA = -np.swapaxes(S_row, -1, -2) - S_col     # advanced_sigma_mat(S, k, n)
+    GR = G_row + np.swapaxes(G_col, -1, -2)      # retarded_mat(G, n, k)
+    GA = -np.swapaxes(G_row, -1, -2) - G_col     # advanced_mat(G, k, n)
+    c1 = np.sum(w * (SR @ G_col + S_row @ GA), axis=0)
+    c2 = np.sum(w * (GR @ S_col + G_row @ SA), axis=0)
+    return -1j * (h_list[n] @ G[n, n] + c1) + 1j * (G[n, n] @ h_list[n] + c2)
+
+
 def evolve_kktz_kbe_matrix_checkpointed(
     t_eq,
     Ggt_eq,
@@ -2307,11 +2463,15 @@ def evolve_kktz_kbe_matrix_checkpointed(
     Nw: int | None = None,
     save_full_final_G: bool = False,
     include_postpost_G: bool = False,
+    return_diagnostics: bool = False,
 ):
     """Checkpointed KKTZ two-time KBE evolution.
 
     Checkpoint file stores the full in-progress G so the job can resume.
     Final file is lean by default: post-quench equal-time LR and O1 only.
+    Corrector convergence is recorded per step, as in syk_batch_tools.evolve_syk4_kbe: corr_final_err[n] (change of
+    row/column n in the last corrector iteration) and corr_iters_used[n]. With return_diagnostics, returns
+    (t, G, dict(corr_final_err, corr_iters_used, n0)) instead of (t, G).
     """
     t = np.arange(-t_pre, t_post + 0.5 * dt, dt)
     n0 = int(np.argmin(np.abs(t)))
@@ -2324,12 +2484,18 @@ def evolve_kktz_kbe_matrix_checkpointed(
     mu_of_t = np.where(t < 0.0, mu_i, mu_f)
     h_list = np.array([h_mu_matrix(m) for m in mu_of_t])
 
+    corr_final_err = np.full(Nt, np.nan, dtype=float)
+    corr_iters_used = np.zeros(Nt, dtype=int)
+
     if ckpt and resume and ckpt.exists():
         z = np.load(ckpt, allow_pickle=True)
         G = z["G"]
         n_last = int(z["n_last"])
         if G.shape != (Nt, Nt, 2, 2):
             raise ValueError(f"Checkpoint G shape {G.shape} incompatible with requested {(Nt, Nt, 2, 2)}")
+        if "corr_final_err" in z.files:      # checkpoints written before the diagnostics existed resume without them
+            corr_final_err[: n_last + 1] = z["corr_final_err"][: n_last + 1]
+            corr_iters_used[: n_last + 1] = z["corr_iters_used"][: n_last + 1]
         print(f"Resuming KBE from {ckpt}; last completed index n={n_last}, t={t[n_last]:.6g}")
     else:
         max_needed_t = np.max(np.abs(t[: n0 + 1, None] - t[None, : n0 + 1]))
@@ -2355,6 +2521,8 @@ def evolve_kktz_kbe_matrix_checkpointed(
                 t=t,
                 n0=n0,
                 n_last=n_done,
+                corr_final_err=corr_final_err,
+                corr_iters_used=corr_iters_used,
                 J_i=J_i,
                 J_f=J_f,
                 alpha_i=alpha_i,
@@ -2386,12 +2554,17 @@ def evolve_kktz_kbe_matrix_checkpointed(
     for checkpoint_signal in (signal.SIGUSR1, signal.SIGTERM):
         signal.signal(checkpoint_signal, _checkpoint_then_exit)
 
-    for n in range(n_last + 1, Nt):
-        S = sigma_greater_kktz(G, J_of_t, alpha_of_t, keep_cross_self_energy=keep_cross_self_energy)
+    # Same scheme as rhs_t1_matrix/rhs_t2_matrix called per element, vectorised: the memory sums for a whole row/column
+    # are matrix-vector products, Sigma^> is recomputed only where G changed (row/column n), and the weighted
+    # advanced-G triangle MT gains one column per completed step (rebuilt from G on resume; not checkpointed).
+    S = sigma_greater_kktz(G, J_of_t, alpha_of_t, keep_cross_self_energy=keep_cross_self_energy)
+    MT = np.zeros_like(G)
+    for j in range(n_last + 1):
+        _kbe_mt_set_column(MT, G, j, dt)
 
-        d1_old = np.array([rhs_t1_matrix(G, S, h_list, n - 1, j, dt) for j in range(n)])
-        d2_old = np.array([rhs_t2_matrix(G, S, h_list, i, n - 1, dt) for i in range(n)])
-        ddiag_old = rhs_t1_matrix(G, S, h_list, n - 1, n - 1, dt) + rhs_t2_matrix(G, S, h_list, n - 1, n - 1, dt)
+    for n in range(n_last + 1, Nt):
+        d1_old, d2_old = _kbe_rhs_row_col_old(G, S, MT, h_list, n, dt)
+        ddiag_old = d1_old[n - 1] + d2_old[n - 1]
 
         G[n, :n] = G[n - 1, :n] + dt * d1_old
         G[:n, n] = G[:n, n - 1] + dt * d2_old
@@ -2399,15 +2572,15 @@ def evolve_kktz_kbe_matrix_checkpointed(
         enforce_equal_time_majorana(G, n)
 
         last_err = np.inf
-        for _ in range(n_corr):
+        it_used = 0
+        for it in range(n_corr):
             row_old = G[n, :n].copy()
             col_old = G[:n, n].copy()
             diag_old = G[n, n].copy()
 
-            S = sigma_greater_kktz(G, J_of_t, alpha_of_t, keep_cross_self_energy=keep_cross_self_energy)
-            d1_new = np.array([rhs_t1_matrix(G, S, h_list, n, j, dt) for j in range(n)])
-            d2_new = np.array([rhs_t2_matrix(G, S, h_list, i, n, dt) for i in range(n)])
-            ddiag_new = rhs_t1_matrix(G, S, h_list, n, n, dt) + rhs_t2_matrix(G, S, h_list, n, n, dt)
+            _sigma_update_slice_kktz(S, G, J_of_t, alpha_of_t, n, keep_cross_self_energy=keep_cross_self_energy)
+            d1_new, d2_new = _kbe_rhs_row_col_new(G, S, MT, h_list, n, dt)
+            ddiag_new = _kbe_rhs_diag_new(G, S, h_list, n, dt)
 
             G[n, :n] = G[n - 1, :n] + 0.5 * dt * (d1_old + d1_new)
             G[:n, n] = G[:n, n - 1] + 0.5 * dt * (d2_old + d2_new)
@@ -2419,14 +2592,20 @@ def evolve_kktz_kbe_matrix_checkpointed(
                 np.max(np.abs(G[:n, n] - col_old)),
                 np.max(np.abs(G[n, n] - diag_old)),
             )
+            it_used = it + 1
             if last_err < corr_tol:
                 break
+        # Row/column n of G is final: bring S and MT up to date for the next step.
+        _sigma_update_slice_kktz(S, G, J_of_t, alpha_of_t, n, keep_cross_self_energy=keep_cross_self_energy)
+        _kbe_mt_set_column(MT, G, n, dt)
 
+        corr_final_err[n] = last_err
+        corr_iters_used[n] = it_used
         checkpoint_state["n_last"] = n
 
         if print_every and (n - n0) % print_every == 0:
             B = -np.real(G[n, n, 0, 1])
-            print(f"evolved to t={t[n]:.3f}; n={n}/{Nt-1}; B={B:.8e}; corr_err={last_err:.3e}", flush=True)
+            print(f"evolved to t={t[n]:.3f}; n={n}/{Nt-1}; B={B:.8e}; corr_err={last_err:.3e}; iters={it_used}", flush=True)
 
         if ckpt and checkpoint_every and ((n - n0) % checkpoint_every == 0 or n == Nt - 1):
             atomic_savez(
@@ -2436,6 +2615,8 @@ def evolve_kktz_kbe_matrix_checkpointed(
                 t=t,
                 n0=n0,
                 n_last=n,
+                corr_final_err=corr_final_err,
+                corr_iters_used=corr_iters_used,
                 J_i=J_i,
                 J_f=J_f,
                 alpha_i=alpha_i,
@@ -2494,6 +2675,8 @@ def evolve_kktz_kbe_matrix_checkpointed(
         ckpt.unlink()
         print("KKTZ KBE checkpoint removed (run complete).")
 
+    if return_diagnostics:
+        return t, G, {"corr_final_err": corr_final_err, "corr_iters_used": corr_iters_used, "n0": np.array(n0)}
     return t, G
 
 
@@ -3029,7 +3212,7 @@ def run_kbe_one(
         GR_w = z["GR_w"] if "GR_w" in z.files else None
         F_t = z["F_t"] if "F_t" in z.files else None
 
-        t_kbe, Ggt = evolve_kktz_kbe_matrix_checkpointed(
+        t_kbe, Ggt, diagnostics = evolve_kktz_kbe_matrix_checkpointed(
             t_eq,
             Ggt_eq,
             J_i=J_i,
@@ -3052,6 +3235,7 @@ def run_kbe_one(
             final_path=None,  # Save below so metadata/eq arrays match the batch manifest.
             Nw=Nw_loaded,
             save_full_final_G=False,
+            return_diagnostics=True,
         )
 
         n0 = int(np.argmin(np.abs(t_kbe)))
@@ -3078,6 +3262,8 @@ def run_kbe_one(
             "t_post": np.array(t_post),
             "Nw": np.array(Nw_loaded),
             "metadata_json": _json_safe(meta),
+            "corr_final_err_post": diagnostics["corr_final_err"][n0:],      # same keys as the SYK KBE files
+            "corr_iters_used_post": diagnostics["corr_iters_used"][n0:],
         }
         if omega_loaded is not None:
             payload["omega"] = omega_loaded
