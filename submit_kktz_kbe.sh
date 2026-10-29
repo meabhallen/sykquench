@@ -21,12 +21,12 @@ MU_IS=(0.0)
 MU_FS=(0.0)
 BETAS=(12) # 10 14)
 
-DT=0.05
+DT_FACTOR=0.06                  # dt = DT_FACTOR * 5 / sqrt(BETA) = 0.3 / sqrt(BETA), as the saved KKTZ runs since 2026-09-09
 T_PRE_FACTOR=2.0
-T_POST_FACTOR=2.0
+T_POST_FACTOR=1.0
 
-CORR_TOL=1e-8
-N_CORR=4 #25
+CORR_TOL_FACTOR=1e-8            # corr_tol = CORR_TOL_FACTOR * (dt / 0.05)^3 = 1e-8 * (36 / BETA)^1.5, as the saved KKTZ runs
+N_CORR=50
 ITERATIONS=50 #1000
 CHECKPOINT_EVERY=250
 
@@ -64,6 +64,10 @@ print(float(Fraction('$ALPHA_I_VALUE')))
     # Keep alpha fixed during the quench.
     ALPHA_F="$ALPHA_I"
 
+    DT=$(python3 -c "print($DT_FACTOR / $BETA**0.5 * 5)")
+
+    CORR_TOL=$(python3 -c "print($CORR_TOL_FACTOR * ($DT / 0.05)**3)")
+
     EQ_NW=$(python3 -c "
 Nw = max(
     4001,
@@ -79,6 +83,8 @@ print(Nw)
     echo "  alpha:   $ALPHA_I -> $ALPHA_F"
     echo "  mu:      $MU_I -> $MU_F"
     echo "  beta:    $BETA"
+    echo "  dt:      $DT"
+    echo "  corr_tol: $CORR_TOL"
     echo "  EQ_NW:   $EQ_NW"
 
     sbatch \
