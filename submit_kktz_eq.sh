@@ -32,7 +32,7 @@ PROJECT=1
 # T_MAX=160
 
 # ─────────────────────────────────────────────────────────────────────────────
-WORK_DIR=${WORK_DIR:-/global/scratch/users/$USER/syk}
+WORK_DIR=${WORK_DIR:-/global/scratch/users/$USER/sykquench}
 SCRIPT=run_kktz_eq_single.sh
 
 mkdir -p "$WORK_DIR/logs" "$WORK_DIR/eq_runs"

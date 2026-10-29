@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=72:00:00
-#SBATCH --output=/global/scratch/users/%u/syk/logs/kktz_eq_%j.out
-#SBATCH --error=/global/scratch/users/%u/syk/logs/kktz_eq_%j.err
+#SBATCH --output=/global/scratch/users/%u/sykquench/logs/kktz_eq_%j.out
+#SBATCH --error=/global/scratch/users/%u/sykquench/logs/kktz_eq_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=meabh_allen@berkeley.edu
 #SBATCH --requeue
@@ -24,7 +24,7 @@ export VECLIB_MAXIMUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-WORK_DIR=${WORK_DIR:-/global/scratch/users/$USER/syk}
+WORK_DIR=${WORK_DIR:-/global/scratch/users/$USER/sykquench}
 cd "$WORK_DIR"
 mkdir -p "$WORK_DIR/logs" "$WORK_DIR/eq_runs"
 
