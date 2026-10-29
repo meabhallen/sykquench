@@ -3330,7 +3330,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     if args.cmd == "eq-one":
-        run_equilibrium_one(
+        result = run_equilibrium_one(
             J4=args.J4,
             beta=args.beta,
             J2=args.J2,
@@ -3356,7 +3356,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             clip_negative_A=args.clip_negative_A,
         )
     elif args.cmd == "kbe-one":
-        run_kbe_one(
+        result = run_kbe_one(
             J4_i=args.J4_i,
             J4_f=args.J4_f,
             beta=args.beta,
@@ -3400,6 +3400,9 @@ def main(argv: Optional[List[str]] = None) -> None:
             run_equilibrium_grid(cfg, out_dir=args.out_dir or "eq_runs", overwrite=args.overwrite)
         else:
             run_kbe_grid(cfg, eq_dir=args.eq_dir, out_dir=args.out_dir or "kbe_runs", overwrite=args.overwrite)
+    if args.cmd in ("eq-one", "kbe-one") and result is None:
+        # The run failed (traceback above, "failed" row in the manifest): exit nonzero so Slurm marks the job FAILED.
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
