@@ -2653,11 +2653,18 @@ def find_ref_eq_file(eq_dir: Path, J4: float, beta: float, omega_real: np.ndarra
             rows = rows[np.isclose(rows[col].fillna(0.0).astype(float), 0.0)]
     for fname in rows["filename"]:
         path = Path(fname)
-        if not path.exists():
-            continue
-        with np.load(path, allow_pickle=False) as z:
-            if np.array_equal(z["omega_real"], omega_real):
-                return path
+
+        # If the manifest points to the wrong directory,
+        # search the equilibrium subdirectories for the file.
+        if path.is_file():
+            candidates = [path]
+        else:
+            candidates = list(eq_dir.glob(f"*/{path.name}"))
+
+        for candidate in candidates:
+            with np.load(candidate, allow_pickle=False) as z:
+                if np.array_equal(z["omega_real"], omega_real):
+                    return candidate.resolve()
     raise FileNotFoundError(
         f"No lambda = mu = 0 equilibrium for J4={J4}, beta={beta} on this omega grid in {eq_dir}; run eq-one with "
         "--kernel-lambda 0 --mu 0 on the same grid, or pass --ref-eq-file.")
