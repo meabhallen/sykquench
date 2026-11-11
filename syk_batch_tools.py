@@ -173,8 +173,11 @@ def load_eq_manifest_tree(eq_dir: os.PathLike | str) -> pd.DataFrame:
         if df.empty:
             continue
         df = df.copy()
+        # Use the stored path when it exists (run_eq_single.sh writes the .npz to eq_runs/<tag>/ but the manifest to
+        # eq_runs/, so the basename rule alone misses it); otherwise fall back to the basename next to the manifest.
         df["filename"] = [
-            str(manifest_path.parent / Path(str(raw)).name) for raw in df["filename"]
+            str(Path(str(raw))) if Path(str(raw)).exists() else str(manifest_path.parent / Path(str(raw)).name)
+            for raw in df["filename"]
         ]
         frames.append(df)
 
