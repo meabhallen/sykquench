@@ -469,16 +469,32 @@ def build_kernel_R_w(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,
 ) -> Tuple[np.ndarray, float]:
-    """Causal retarded realization of the regulated tuned-kernel source.
+    """Causal retarded realization of the preparation kernel.
+
+    kernel_kappa=None (default): the regulated tuned-kernel source
 
         K^R(w) = lambda [w^3/J4^2 + c w] R^R_Lambda(w),
         R^R_Lambda(w) = [Lambda/(Lambda - i w)]^4.
 
     R(0)=1, its only pole is at w=-i Lambda (lower half plane), it decays
     as 1/w^4, and K^R(-w)=-conj[K^R(w)] as required for a Majorana
-    quadratic kernel. This is a stable effective-action regulator; a later
-    Hamiltonian/ancilla realization would need its own retuning.
+    quadratic kernel. This is a stable effective-action regulator.
+
+    kernel_kappa=kappa: the damped auxiliary dimer. Each chi_i couples as
+    i v chi_i eta_i to a dimer i M xi_i eta_i, i.e. a complex fermion
+    f_i = (eta_i + i xi_i)/sqrt2 at energy M, and each f_i is tunnel-coupled
+    to its own wide-band reservoir, giving f_i a retarded self-energy
+    -i kappa (eta_i and xi_i damped equally, lifetime 1/kappa). Integrating
+    out dimer + reservoir, with G^R = 1/(w + i eta + K^R - Sigma^R):
+
+        K^R(w) = v^2 (w + i kappa) / (M^2 - (w + i kappa)^2),
+
+    poles at w = +-M - i kappa; kappa -> 0 is the undamped dimer. The usual
+    arguments are reused through the dimer mapping lambda = -J^2 v^2 / M^4,
+    c = -M^2/J^2, Lambda = M: kernel_cutoff is M, v^2 = -lambda M^4 / J^2,
+    and kernel_c must equal -M^2/J^2 (checked).
     """
     J_kernel = abs(float(J4))
     if kernel_lambda != 0.0 and J_kernel == 0.0:
@@ -491,6 +507,20 @@ def build_kernel_R_w(
 
     if kernel_lambda == 0.0:
         K_R_w = np.zeros_like(omega, dtype=complex)
+    elif kernel_kappa is not None:
+        kappa = float(kernel_kappa)
+        if kappa <= 0.0:
+            raise ValueError("kernel_kappa (dimer damping) must be positive.")
+        M = kernel_cutoff
+        if float(kernel_lambda) > 0.0:
+            raise ValueError("damped dimer needs kernel_lambda < 0 (v^2 = -lambda M^4/J^2 > 0).")
+        if not np.isclose(float(kernel_c), -M**2 / J_kernel**2):
+            raise ValueError(
+                f"damped dimer needs kernel_c = -M^2/J^2 = {-M**2 / J_kernel**2} for kernel_cutoff M = {M}, got {kernel_c}"
+            )
+        v2 = -float(kernel_lambda) * M**4 / J_kernel**2
+        z = np.asarray(omega) + 1j * kappa
+        K_R_w = v2 * z / (M**2 - z**2)
     else:
         regulator_R = (kernel_cutoff / (kernel_cutoff - 1j * omega)) ** 4
         K_R_w = float(kernel_lambda) * (
@@ -598,6 +628,7 @@ def solve_equilibrium_greater_real_time(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,    # None: regulated kernel; float: damped dimer (see build_kernel_R_w)
     checkpoint_path: Optional[Path] = None,  # path for .ckpt.npz; None = no checkpointing
     checkpoint_every: int = 200,             # iterations between checkpoint saves
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool, float, np.ndarray, np.ndarray, np.ndarray]:
@@ -654,7 +685,7 @@ def solve_equilibrium_greater_real_time(
     # for the definition. Shared with evolve_syk4_kbe so eq and (optional)
     # KBE runs always agree on the kernel for the same parameters.
     K_R_w, kernel_cutoff = build_kernel_R_w(
-        omega_real, J4, kernel_lambda, kernel_c, kernel_cutoff
+        omega_real, J4, kernel_lambda, kernel_c, kernel_cutoff, kernel_kappa
     )
 
     # ── Initialise or resume ─────────────────────────────────────────────────
@@ -815,6 +846,7 @@ def solve_equilibrium_greater_real_time(
                         kernel_lambda=kernel_lambda,
                         kernel_c=kernel_c,
                         kernel_cutoff=kernel_cutoff,
+                        kernel_kappa=kernel_kappa,
                         omega=omega_real,
                         beta=beta,
                         t_cut=kbe_dab_t_cut,
@@ -840,6 +872,7 @@ def solve_equilibrium_greater_real_time(
                         kernel_lambda=kernel_lambda,
                         kernel_c=kernel_c,
                         kernel_cutoff=kernel_cutoff,
+                        kernel_kappa=kernel_kappa,
                         omega=omega_real,
                         beta=beta,
                         t_cut=kbe_dab_t_cut,
@@ -2176,6 +2209,7 @@ def calc_kbe_d_ab_syk_equilibrium(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,
     omega: Optional[np.ndarray] = None,
     beta: Optional[float] = None,
     t_cut: Optional[float] = None,
@@ -2237,7 +2271,7 @@ def calc_kbe_d_ab_syk_equilibrium(
             raise ValueError(
                 "omega is required to build the tuned kernel when kernel_lambda != 0."
             )
-        K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff)
+        K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff, kernel_kappa)
         K_R_t = _build_kernel_R_t(t, omega, K_R_w)
         # K^A(t) = conj(K^R(-t)); the grid is symmetric about t=0, so
         # reversal maps t -> -t (same convention used elsewhere in this
@@ -2305,6 +2339,7 @@ def calc_kbe_d_ab_syk_equilibrium_massdef(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,
     omega: Optional[np.ndarray] = None,
     beta: Optional[float] = None,
     t_cut: Optional[float] = None,
@@ -2358,7 +2393,7 @@ def calc_kbe_d_ab_syk_equilibrium_massdef(
             raise ValueError(
                 "omega is required to build the tuned kernel when kernel_lambda != 0."
             )
-        K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff)
+        K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff, kernel_kappa)
         K_R_t = _build_kernel_R_t(t, omega, K_R_w)
         K_A_t = np.conj(K_R_t[::-1])
         SR = SR - K_R_t
@@ -2438,7 +2473,8 @@ def kbe_filename(out_dir: os.PathLike | str, meta: Dict[str, Any]) -> Path:
         f"_beta_{sf(meta['beta'])}_dt_{sf(meta['dt'])}"
         f"_tpre_{sf(meta['t_pre'])}_tpost_{sf(meta['t_post'])}"
         f"_ncorr_{int(meta['n_corr'])}_ctol_{sf(meta['corr_tol'])}"
-        + ("_dG" if meta.get("delta_g") else "") + f"_{h}.npz"
+        + ("_dG" if meta.get("delta_g") else "")
+        + ("_damped" if meta.get("eq_kernel_type") == "damped_dimer" else "") + f"_{h}.npz"
     )
 
 
@@ -2462,6 +2498,7 @@ def run_equilibrium_one(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,
     enforce_even_A: bool = True,
     clip_negative_A: bool = False,
     normalize_A: bool = True,
@@ -2510,6 +2547,12 @@ def run_equilibrium_one(
         "clip_negative_A": bool(clip_negative_A),
         "normalize_A": bool(normalize_A),
     }
+    if kernel_kappa is not None:
+        # Only damped-dimer runs carry these keys, so regulated-kernel metadata, hashes and file names are unchanged.
+        if float(kernel_lambda) == 0.0:
+            raise ValueError("--damped-dimer needs a nonzero --kernel-lambda (at lambda = 0 there is no dimer).")
+        meta["kernel_type"] = "damped_dimer"
+        meta["kernel_kappa"] = float(kernel_kappa)
     filename = equilibrium_filename(out_dir, meta)
 
     if filename.exists() and not overwrite:
@@ -2529,7 +2572,7 @@ def run_equilibrium_one(
             seed_row = find_eq_file(
                 load_eq_manifest_tree(manifest_dir), J4, beta, J2=J2, mu=seed_mu,
                 kernel_lambda=kernel_lambda, kernel_c=kernel_c, kernel_cutoff=kernel_cutoff,
-                clip_negative_A=clip_negative_A,
+                kernel_kappa=kernel_kappa, clip_negative_A=clip_negative_A,
             )
             with np.load(seed_row["filename"], allow_pickle=False) as seed:
                 A_seed = np.array(seed["A"], copy=True)
@@ -2567,6 +2610,7 @@ def run_equilibrium_one(
             kernel_lambda=kernel_lambda,
             kernel_c=kernel_c,
             kernel_cutoff=kernel_cutoff,
+            kernel_kappa=kernel_kappa,
             enforce_even_A=enforce_even_A,
             clip_negative_A=clip_negative_A,
             normalize_A=normalize_A,
@@ -2621,6 +2665,7 @@ def kernel_clipping_is_inactive(
     kernel_cutoff: Optional[float],
     omega_max: float = 400.0,
     n_omega: int = 40001,
+    kernel_kappa: Optional[float] = None,
 ) -> bool:
     """True if clipping negative A_raw cannot change the equilibrium solution.
 
@@ -2633,7 +2678,7 @@ def kernel_clipping_is_inactive(
     if float(kernel_lambda) == 0.0:
         return True
     omega = np.linspace(-omega_max, omega_max, n_omega)
-    K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff)
+    K_R_w, _ = build_kernel_R_w(omega, J4, kernel_lambda, kernel_c, kernel_cutoff, kernel_kappa)
     return bool(np.min(np.imag(K_R_w)) >= -1e-14 * np.max(np.abs(K_R_w)))
 
 
@@ -2673,6 +2718,7 @@ def find_eq_file(
     kernel_lambda: float = 0.0,
     kernel_c: float = 0.0,
     kernel_cutoff: Optional[float] = None,
+    kernel_kappa: Optional[float] = None,
     prefer_smallest_dt: bool = True,
     allow_not_converged: bool = False,
     clip_negative_A: Optional[bool] = False,
@@ -2735,7 +2781,7 @@ def find_eq_file(
         if (
             not clip_negative_A
             and accept_clipped_if_inactive
-            and kernel_clipping_is_inactive(J4, kernel_lambda, kernel_c, kernel_cutoff)
+            and kernel_clipping_is_inactive(J4, kernel_lambda, kernel_c, kernel_cutoff, kernel_kappa=kernel_kappa)
         ):
             clip_rank = stored_clip.astype(int)  # 0 = unclipped (preferred)
         else:
@@ -2764,11 +2810,21 @@ def find_eq_file(
                 )
             ]
 
+        # Preparation-kernel type: rows without a kernel_type column (all files from before the damped
+        # dimer existed) are the regulated kernel. A damped-dimer request only matches damped rows with the same kappa.
+        stored_type = good["kernel_type"].fillna("regulated") if "kernel_type" in good.columns else pd.Series("regulated", index=good.index)
+        if kernel_kappa is None:
+            good = good[stored_type == "regulated"]
+        else:
+            good = good[stored_type == "damped_dimer"]
+            good = good[np.isclose(good["kernel_kappa"].astype(float), float(kernel_kappa))] if len(good) else good
+
     if len(good) == 0:
         raise FileNotFoundError(
             f"No converged equilibrium file found for J2={J2}, J4={J4}, "
             f"beta={beta}, mu={mu}, kernel_lambda={kernel_lambda}, "
             f"kernel_c={kernel_c}, kernel_cutoff={kernel_cutoff}, "
+            + ("regulated kernel" if kernel_kappa is None else f"damped dimer kappa={kernel_kappa}") + ", "
             f"clip_negative_A={clip_negative_A}"
         )
 
@@ -2813,6 +2869,8 @@ def run_kbe_one(
     eq_kernel_lambda: float = 0.0,
     eq_kernel_c: float = 0.0,
     eq_kernel_cutoff: Optional[float] = None,
+    # None: the eq state was prepared with the regulated kernel; float: with the damped dimer at this kappa.
+    eq_kernel_kappa: Optional[float] = None,
     # mu used to select the initial equilibrium state (the actual mu_i fed
     # into the evolution is read back from that file's own metadata, not
     # re-derived from this -- see the "mu_i" comment below).
@@ -2828,6 +2886,7 @@ def run_kbe_one(
     # delta-G mode (opt-in): evolve G - G_ref around the lambda = mu = 0 equilibrium in ref_eq_file (see evolve_syk4_kbe_dg)
     delta_g: bool = False,
     ref_eq_file: Optional[os.PathLike | str] = None,
+    ref_eq_dir: Optional[os.PathLike | str] = None,   # where to look up the lambda = mu = 0 reference (default: eq_dir)
     dg_corr_tol: float = 1e-19,
     dg_stagnation: bool = True,
     dg_residual_dir: Optional[os.PathLike | str] = None,
@@ -2860,6 +2919,7 @@ def run_kbe_one(
             kernel_lambda=eq_kernel_lambda,
             kernel_c=eq_kernel_c,
             kernel_cutoff=eq_kernel_cutoff,
+            kernel_kappa=eq_kernel_kappa,
             allow_not_converged=eq_allow_not_converged,
             clip_negative_A=eq_clip_negative_A,
             accept_clipped_if_inactive=eq_accept_clipped_if_inactive,
@@ -2886,6 +2946,20 @@ def run_kbe_one(
             # at) -- not re-derived from eq_mu, so a selection mismatch can
             # never silently feed the wrong mu into the evolution.
             mu_i = float(np.asarray(eq_data["mu"]).item()) if "mu" in eq_data.files else 0.0
+            # The eq file must have been prepared with the requested kernel type (guards against mixing
+            # regulated-kernel and damped-dimer states, e.g. via --eq-file or a misplaced file).
+            eq_meta = json.loads(str(eq_data["metadata_json"])) if "metadata_json" in eq_data.files else {}
+            eq_type = eq_meta.get("kernel_type", "regulated")
+            want_type = "regulated" if eq_kernel_kappa is None else "damped_dimer"
+            if float(eq_meta.get("kernel_lambda", 0.0)) != 0.0 and (
+                eq_type != want_type
+                or (want_type == "damped_dimer" and not np.isclose(float(eq_meta["kernel_kappa"]), float(eq_kernel_kappa)))
+            ):
+                raise ValueError(
+                    f"eq file {eq_file} was prepared with kernel_type={eq_type}"
+                    + (f", kappa={eq_meta.get('kernel_kappa')}" if eq_type == "damped_dimer" else "")
+                    + f", but this run asked for {want_type}" + (f", kappa={eq_kernel_kappa}" if eq_kernel_kappa is not None else "")
+                )
             if "A_off" in eq_data.files:
                 A_off = np.array(eq_data["A_off"], copy=True)
             elif mu_i == 0.0:
@@ -2954,9 +3028,14 @@ def run_kbe_one(
         "save_format": "post_quench_rows_plus_eq_gf_massdef" if massdef else "post_quench_rows_plus_eq_gf",
         "full_Ggt_saved": False,
     }
+    if eq_kernel_kappa is not None:
+        # Only damped-dimer runs carry these keys (regulated-kernel hashes and names unchanged); kbe_filename adds _damped.
+        meta["eq_kernel_type"] = "damped_dimer"
+        meta["eq_kernel_kappa"] = float(eq_kernel_kappa)
     if delta_g:
         if ref_eq_file is None:
-            ref_eq_file = find_ref_eq_file(Path(eq_dir), J4_i, beta, omega_real, allow_not_converged=eq_allow_not_converged)
+            ref_eq_file = find_ref_eq_file(Path(ref_eq_dir if ref_eq_dir is not None else eq_dir), J4_i, beta, omega_real,
+                                           allow_not_converged=eq_allow_not_converged)
             print(f"delta-G reference (lambda = mu = 0): {ref_eq_file}")
         if J2_i != 0.0 or J2_f != 0.0 or J4_i != J4_f or kernel_lambda != 0.0:
             raise ValueError("delta-G mode needs J2 = 0, J4_i = J4_f and no evolution kernel.")
@@ -3277,6 +3356,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     peq.add_argument("--kernel-lambda", type=float, default=0.0)
     peq.add_argument("--kernel-c", type=float, default=0.0)
     peq.add_argument("--kernel-cutoff", type=float, default=None)
+    peq.add_argument("--damped-dimer", action="store_true", help="Prepare with the damped auxiliary dimer K^R = v^2 (w + i kappa)/(M^2 - (w + i kappa)^2) instead of the regulated kernel, via lambda = -J^2 v^2/M^4, c = -M^2/J^2 (must hold), cutoff = M. Changes the file hash (kernel_type/kernel_kappa in the metadata); put these runs in their own --out-dir/--manifest-dir (eq_runs_damped).")
+    peq.add_argument("--dimer-kappa", type=float, default=0.1, help="Dimer damping kappa (units of J) for --damped-dimer.")
     peq.add_argument("--verbose-every", type=int, default=50)
     peq.add_argument("--overwrite", action="store_true")
     peq.add_argument("--clip-negative-A", action="store_true", help="Legacy behaviour: clip negative A_raw to 0 each iteration. Off by default because when the kernel has Im K^R < 0 (kernel_lambda*kernel_c < 0) the exact solution has A_raw < 0 in the tails, and clipping biases the lambda-odd response. Part of the file hash; kbe-one only picks clipped eq files with --eq-clipped.")
@@ -3304,6 +3385,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--eq-kernel-lambda", type=float, default=0.0)
     pkbe.add_argument("--eq-kernel-c", type=float, default=0.0)
     pkbe.add_argument("--eq-kernel-cutoff", type=float, default=None)
+    pkbe.add_argument("--eq-damped-dimer", action="store_true", help="The eq state was prepared with --damped-dimer: selects (and checks) a damped-dimer eq file and adds _damped to the output file name.")
+    pkbe.add_argument("--eq-dimer-kappa", type=float, default=0.1, help="Dimer damping kappa of the eq state for --eq-damped-dimer.")
     pkbe.add_argument("--eq-mu", type=float, default=0.0, help="mu used to select which equilibrium file to quench from (matched against the eq manifest's mu column, same pattern as --eq-kernel-lambda).")
     pkbe.add_argument("--eq-dir", default="eq_runs")
     pkbe.add_argument("--out-dir", default="kbe_runs")
@@ -3314,7 +3397,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     pkbe.add_argument("--no-diagnostics", action="store_true")
     pkbe.add_argument("--overwrite", action="store_true")
     pkbe.add_argument("--delta-g", action="store_true", help="Evolve dG = G - G_ref around the lambda = mu = 0 equilibrium (--ref-eq-file) instead of G: same scheme, about 2.5-3 decades lower round-off floor. Output key dGgt_post (+ g0); file names get _dG. Needs J2 = 0, J4_i = J4_f, no evolution kernel.")
-    pkbe.add_argument("--ref-eq-file", default=None, help="lambda = mu = 0 eq npz at the same beta and on the same omega grid (delta-G reference). Default: looked up in --eq-dir.")
+    pkbe.add_argument("--ref-eq-file", default=None, help="lambda = mu = 0 eq npz at the same beta and on the same omega grid (delta-G reference). Default: looked up in --ref-eq-dir.")
+    pkbe.add_argument("--ref-eq-dir", default=None, help="Where to look up the delta-G reference (default: --eq-dir). For damped-dimer runs the reference is the ordinary lambda = mu = 0 solve, so point this at eq_runs.")
     pkbe.add_argument("--dg-corr-tol", type=float, default=1e-19, help="Corrector tolerance on the dG change (delta-G mode; Goff keeps --corr-tol).")
     pkbe.add_argument("--no-dg-stagnation", action="store_true", help="delta-G mode: do not stop the corrector when its change stops falling (arithmetic floor).")
     pkbe.add_argument("--dg-residual", choices=["auto", "extended", "double"], default="auto", help="delta-G mode: precision of the once-per-grid residual. double leaves a ~3-5e-19 per step drift in single runs (pairs unaffected); extended removes it but costs ~Nt^3 (auto: extended up to Nt = 6000).")
@@ -3349,6 +3433,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             kernel_lambda=args.kernel_lambda,
             kernel_c=args.kernel_c,
             kernel_cutoff=args.kernel_cutoff,
+            kernel_kappa=args.dimer_kappa if args.damped_dimer else None,
             verbose_every=args.verbose_every,
             overwrite=args.overwrite,
             manifest_dir=args.manifest_dir,
@@ -3377,6 +3462,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             eq_kernel_lambda=args.eq_kernel_lambda,
             eq_kernel_c=args.eq_kernel_c,
             eq_kernel_cutoff=args.eq_kernel_cutoff,
+            eq_kernel_kappa=args.eq_dimer_kappa if args.eq_damped_dimer else None,
             eq_mu=args.eq_mu,
             eq_dir=args.eq_dir,
             out_dir=args.out_dir,
@@ -3388,6 +3474,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             save_diagnostics=not args.no_diagnostics,
             delta_g=args.delta_g,
             ref_eq_file=args.ref_eq_file,
+            ref_eq_dir=args.ref_eq_dir,
             dg_corr_tol=args.dg_corr_tol,
             dg_stagnation=not args.no_dg_stagnation,
             dg_residual_dir=args.dg_residual_dir,

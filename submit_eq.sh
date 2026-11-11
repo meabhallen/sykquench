@@ -37,6 +37,8 @@ EQ_DT_FACTORS=(0.0064)      # eq dt = EQ_DT_FACTOR / J4
 OMEGA_MAX_FACTORS=(36)      # omega_max = OMEGA_MAX_FACTOR * J4
 NW_RATIOS=(20)              # Nw = max(4001, round(NW_RATIO * BETA * omega_max)), forced odd
 VERBOSE_EVERY=500          # print progress every N iterations
+DAMPED=0                   # 1 = prepare with the damped auxiliary dimer (kappa = DIMER_KAPPA) into eq_runs_damped/;
+DIMER_KAPPA=0.1            #     needs EQ_KERNEL_LAMBDA < 0 and EQ_KERNEL_C = -cutoff^2 (dimer mapping)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixed settings
@@ -79,8 +81,8 @@ print(Nw)
     echo "Submitting: J4=$J4 beta=$BETA mu=$MU dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL kernel_lambda=$EQ_KERNEL_LAMBDA kernel_c=$EQ_KERNEL_C kernel_cutoff=$EQ_KERNEL_CUTOFF dab_tol=$DAB_TOL"
 
     sbatch \
-    	--job-name="syk_eq_J-${J4}_beta-${BETA}_mu-${MU}_lam-${EQ_KERNEL_LAMBDA}_c-${EQ_KERNEL_C}_Lam-${EQ_KERNEL_CUTOFF}" \
-    	--export=ALL,J4=$J4,BETA=$BETA,MU=$MU,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB,VERBOSE_EVERY=$VERBOSE_EVERY \
+    	--job-name="syk_eq_J-${J4}_beta-${BETA}_mu-${MU}_lam-${EQ_KERNEL_LAMBDA}_c-${EQ_KERNEL_C}_Lam-${EQ_KERNEL_CUTOFF}$( [ "$DAMPED" = "1" ] && echo "_damped" )" \
+    	--export=ALL,J4=$J4,BETA=$BETA,MU=$MU,DT=$DT,OMEGA_MAX=$OMEGA_MAX,NW=$NW,TOL=$TOL,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,DAB_TOL=$DAB_TOL,REQUIRE_DAB=$REQUIRE_DAB,VERBOSE_EVERY=$VERBOSE_EVERY,DAMPED=$DAMPED,DIMER_KAPPA=$DIMER_KAPPA \
     	"$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))

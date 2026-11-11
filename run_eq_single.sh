@@ -36,13 +36,24 @@ MU=${MU:-0.0}
 DAB_TOL=${DAB_TOL:-1e-6}
 REQUIRE_DAB=${REQUIRE_DAB:-0}
 VERBOSE_EVERY=${VERBOSE_EVERY:-50}
+# DAMPED=1: prepare with the damped auxiliary dimer (kappa = DIMER_KAPPA, default 0.1 J) instead of the regulated kernel.
+# Needs EQ_KERNEL_LAMBDA < 0 and EQ_KERNEL_C = -EQ_KERNEL_CUTOFF^2 (dimer mapping). Files go to eq_runs_damped/ (same tag
+# and file-name pattern, but a different hash), so they can never be picked up as regulated-kernel states.
+DAMPED=${DAMPED:-0}
+DIMER_KAPPA=${DIMER_KAPPA:-0.1}
+EQ_ROOT="eq_runs"
+DAMPED_FLAG=""
+if [ "$DAMPED" = "1" ]; then
+    EQ_ROOT="eq_runs_damped"
+    DAMPED_FLAG="--damped-dimer --dimer-kappa $DIMER_KAPPA"
+fi
 
 # When mu != 0, --require-dab-convergence checks BOTH the diagonal (G) and
 # off-diagonal (Goff) KBE residuals (calc_kbe_d_ab_syk_equilibrium_massdef);
 # only DAB_TOL is used for both, same as the mu=0 case.
 
 TAG="eq_J4_$(safe $J4)_b_$(safe $BETA)_mu_$(safe $MU)_lam_$(safe $EQ_KERNEL_LAMBDA)_c_$(safe $EQ_KERNEL_C)_dt_$(safe $DT)_om_$(safe $OMEGA_MAX)_Nw_${NW}"
-OUT_DIR="eq_runs/$TAG"
+OUT_DIR="$EQ_ROOT/$TAG"
 
 KERNEL_CUTOFF_FLAG=""
 if [ -n "${EQ_KERNEL_CUTOFF:-}" ]; then
@@ -55,7 +66,7 @@ if [ "$REQUIRE_DAB" = "1" ]; then
 fi
 
 echo "Job $SLURM_JOB_ID: J4=$J4 beta=$BETA mu=$MU dt=$DT omega_max=$OMEGA_MAX Nw=$NW tol=$TOL"
-echo "  kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=${EQ_KERNEL_CUTOFF:-auto}"
+echo "  kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=${EQ_KERNEL_CUTOFF:-auto}$( [ "$DAMPED" = "1" ] && echo " (damped dimer, kappa=$DIMER_KAPPA)" )"
 echo "  dab_tol=$DAB_TOL require_dab=$REQUIRE_DAB"
 echo "Output: $OUT_DIR"
 
@@ -108,8 +119,8 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" eq-one \
     --kernel-c      "$EQ_KERNEL_C"  \
     --verbose-every "$VERBOSE_EVERY"\
     --out-dir       "$OUT_DIR"      \
-    --manifest-dir  "eq_runs"       \
-    $KERNEL_CUTOFF_FLAG $DAB_FLAG &
+    --manifest-dir  "$EQ_ROOT"      \
+    $KERNEL_CUTOFF_FLAG $DAB_FLAG $DAMPED_FLAG &
 
 PY_PID=$!
 wait "$PY_PID"

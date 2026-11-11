@@ -25,6 +25,8 @@ REF_EQ_FILE=""                  # optional override; leave empty to look up the 
 DG_CORR_TOL=1e-19
 DG_RESIDUAL=auto                # delta-G residual precision: auto (extended up to Nt = 6000), extended, double
 CHECKPOINT_EVERY=200
+DAMPED=0                        # 1 = quench from damped-dimer eq states (eq_runs_damped/, made by submit_eq.sh with DAMPED=1);
+DIMER_KAPPA=0.1                 #     output to kbe_runs_dG_damped/ with _damped names. Damped needs EQ_KERNEL_LAMBDAS < 0 only.
 # Evolution kernel: the kernel actually applied during the real-time KBE
 # integration. Quench dynamics always run with this trivial (off) -- the
 # engineered-kernel deformation only lives in the initial equilibrium state.
@@ -91,8 +93,8 @@ read -r EQ_KERNEL_C EQ_KERNEL_CUTOFF_FACTOR <<< "$EQ_KERNEL_C_CUTOFF"
     echo "Submitting: J4_i=$J4_I J4_f=$J4_F beta=$BETA mu_f=$MU_F eq_mu=$EQ_MU kernel_lambda=$KERNEL_LAMBDA kernel_c=$KERNEL_C kernel_cutoff=$KERNEL_CUTOFF eq_kernel_lambda=$EQ_KERNEL_LAMBDA eq_kernel_c=$EQ_KERNEL_C eq_kernel_cutoff=$EQ_KERNEL_CUTOFF corr_tol=$CORR_TOL"
 
     sbatch \
-        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}$( [ "$DELTA_G" = "1" ] && echo "_dG" )" \
-        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED,EQ_CLIP_MODE=$EQ_CLIP_MODE,DELTA_G=$DELTA_G,REF_EQ_FILE=$REF_EQ_FILE,DG_CORR_TOL=$DG_CORR_TOL,DG_RESIDUAL=$DG_RESIDUAL \
+        --job-name="kbe_Ji-${J4_I}_Jf-${J4_F}_b-${BETA}_dt-${DT}_muf-${MU_F}_eqmu-${EQ_MU}_eqlam-${EQ_KERNEL_LAMBDA}$( [ "$DELTA_G" = "1" ] && echo "_dG" )$( [ "$DAMPED" = "1" ] && echo "_damped" )" \
+        --export=ALL,J4_I=$J4_I,J4_F=$J4_F,BETA=$BETA,DT=$DT,T_PRE_FACTOR=$T_PRE_FACTOR,T_POST_FACTOR=$T_POST_FACTOR,CORR_TOL=$CORR_TOL,N_CORR=$N_CORR,CHECKPOINT_EVERY=$CHECKPOINT_EVERY,KERNEL_LAMBDA=$KERNEL_LAMBDA,KERNEL_C=$KERNEL_C,KERNEL_CUTOFF=$KERNEL_CUTOFF,EQ_KERNEL_LAMBDA=$EQ_KERNEL_LAMBDA,EQ_KERNEL_C=$EQ_KERNEL_C,EQ_KERNEL_CUTOFF=$EQ_KERNEL_CUTOFF,MU_F=$MU_F,EQ_MU=$EQ_MU,EQ_ALLOW_NOT_CONVERGED=$EQ_ALLOW_NOT_CONVERGED,EQ_CLIP_MODE=$EQ_CLIP_MODE,DELTA_G=$DELTA_G,REF_EQ_FILE=$REF_EQ_FILE,DG_CORR_TOL=$DG_CORR_TOL,DG_RESIDUAL=$DG_RESIDUAL,DAMPED=$DAMPED,DIMER_KAPPA=$DIMER_KAPPA \
         "$WORK_DIR/$SCRIPT"
 
     COUNT=$(( COUNT + 1 ))

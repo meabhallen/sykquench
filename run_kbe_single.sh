@@ -38,15 +38,30 @@ MU_F=${MU_F:-0.0}
 EQ_MU=${EQ_MU:-0.0}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-50}
 
+# DAMPED=1: quench from a damped-dimer eq state (eq-one with DAMPED=1, read from eq_runs_damped/; kappa = DIMER_KAPPA,
+# default 0.1 J). The lambda = mu = 0 delta-G reference is the ordinary solve and is still looked up in eq_runs/.
+# Output goes to a separate root (kbe_runs_damped/ or kbe_runs_dG_damped/) with _damped on the folder and file names, so the
+# analysis index over kbe_runs_dG/ never mixes damped and regulated-kernel runs.
+DAMPED=${DAMPED:-0}
+DIMER_KAPPA=${DIMER_KAPPA:-0.1}
+EQ_ROOT="$WORK_DIR/eq_runs"
+DAMPED_FLAGS=""
+SFX=""
+if [ "$DAMPED" = "1" ]; then
+    EQ_ROOT="$WORK_DIR/eq_runs_damped"
+    DAMPED_FLAGS="--eq-damped-dimer --eq-dimer-kappa $DIMER_KAPPA --ref-eq-dir $WORK_DIR/eq_runs"
+    SFX="_damped"
+fi
+
 TAG="kbe_J4i_$(safe $J4_I)_J4f_$(safe $J4_F)_b_$(safe $BETA)_dt_$(safe $DT)_lam_$(safe $KERNEL_LAMBDA)_c_$(safe $KERNEL_C)_eqlam_$(safe $EQ_KERNEL_LAMBDA)_eqc_$(safe $EQ_KERNEL_C)_muf_$(safe $MU_F)_eqmu_$(safe $EQ_MU)"
-OUT_DIR="kbe_runs/$TAG"
+OUT_DIR="kbe_runs${SFX}/${TAG}${SFX}"
 
 # delta-G mode (opt-in): DELTA_G=1; the lambda = mu = 0 reference eq is looked up in eq_runs (or set REF_EQ_FILE). Output goes to kbe_runs_dG/
 # (key dGgt_post instead of Ggt_post), so the analysis index over kbe_runs/ never picks it up by mistake.
 DELTA_G=${DELTA_G:-0}
 DG_FLAGS=""
 if [ "$DELTA_G" = "1" ]; then
-    OUT_DIR="kbe_runs_dG/${TAG}_dG"
+    OUT_DIR="kbe_runs_dG${SFX}/${TAG}_dG${SFX}"
     DG_FLAGS="--delta-g --dg-corr-tol ${DG_CORR_TOL:-1e-19} --dg-residual ${DG_RESIDUAL:-auto}"
     if [ -n "${REF_EQ_FILE:-}" ]; then DG_FLAGS="$DG_FLAGS --ref-eq-file $REF_EQ_FILE"; fi
 fi
@@ -78,6 +93,7 @@ echo "Job $SLURM_JOB_ID: J4_i=$J4_I J4_f=$J4_F beta=$BETA dt=$DT mu_f=$MU_F eq_m
 echo "t_pre_factor=$T_PRE_FACTOR t_post_factor=$T_POST_FACTOR"
 echo "evolution kernel: lambda=$KERNEL_LAMBDA c=$KERNEL_C cutoff=${KERNEL_CUTOFF:-auto}"
 echo "eq-selection kernel: lambda=$EQ_KERNEL_LAMBDA c=$EQ_KERNEL_C cutoff=${EQ_KERNEL_CUTOFF:-auto}"
+echo "eq state: $( [ "$DAMPED" = "1" ] && echo "damped dimer, kappa=$DIMER_KAPPA, from eq_runs_damped" || echo "regulated kernel, from eq_runs" )"
 echo "Output: $OUT_DIR"
 
 # ── Signal handling / requeue ─────────────────────────────────────────────────
@@ -132,9 +148,9 @@ python3 -u "$WORK_DIR/syk_batch_tools.py" kbe-one \
     --eq-kernel-c   "$EQ_KERNEL_C"    \
     --mu-f          "$MU_F"           \
     --eq-mu         "$EQ_MU"          \
-    --eq-dir        "$WORK_DIR/eq_runs"  \
+    --eq-dir        "$EQ_ROOT"        \
     --out-dir       "$OUT_DIR"        \
-    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG $EQ_CLIP_FLAG $DG_FLAGS &
+    $KERNEL_CUTOFF_FLAG $EQ_KERNEL_CUTOFF_FLAG $EQ_ALLOW_NOT_CONVERGED_FLAG $EQ_CLIP_FLAG $DG_FLAGS $DAMPED_FLAGS &
 
 PY_PID=$!
 wait "$PY_PID"
